@@ -726,7 +726,8 @@ class FeedFragment : BaseStateFragment<FeedState>() {
                 } else {
                     NavigationHelper.openVideoDetailFragment(
                         requireContext(), fm,
-                        stream.serviceId, stream.url, stream.title, null, false
+                        stream.serviceId, stream.url, stream.title, null, false,
+                        stream.toStreamInfoItem()
                     )
                 }
             }

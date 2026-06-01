@@ -384,6 +384,18 @@ public final class NavigationHelper {
                                                @NonNull final String title,
                                                @Nullable final PlayQueue playQueue,
                                                final boolean switchingPlayers) {
+        openVideoDetailFragment(context, fragmentManager, serviceId, url, title, playQueue,
+                switchingPlayers, null);
+    }
+
+    public static void openVideoDetailFragment(@NonNull final Context context,
+                                               @NonNull final FragmentManager fragmentManager,
+                                               final int serviceId,
+                                               @Nullable final String url,
+                                               @NonNull final String title,
+                                               @Nullable final PlayQueue playQueue,
+                                               final boolean switchingPlayers,
+                                               @Nullable final StreamInfoItem previewItem) {
 
         final boolean autoPlay;
         @Nullable final PlayerService.PlayerType playerType = PlayerHolder.getInstance().getType();
@@ -412,7 +424,7 @@ public final class NavigationHelper {
                 detailFragment.openVideoPlayer(playerType == PlayerService.PlayerType.POPUP
                         || PlayerHelper.isStartMainPlayerFullscreenEnabled(context));
             } else if (loadVideo) {
-                detailFragment.selectAndLoadVideo(serviceId, url, title, playQueue);
+                detailFragment.selectAndLoadVideo(serviceId, url, title, playQueue, previewItem);
             }
             detailFragment.scrollToTop();
         };
