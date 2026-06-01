@@ -271,7 +271,7 @@ public final class DeArrowItemController {
                 pendingThumbnailTarget = null;
                 // Swap only if this site is still bound to the same item and still showing DeArrow.
                 if (!showingOriginal && idAtRender != null && idAtRender.equals(boundVideoId)) {
-                    crossfadeInDeArrowThumbnail(target, bitmap);
+                    showDeArrowThumbnail(target, bitmap);
                 }
             }
 
@@ -296,26 +296,65 @@ public final class DeArrowItemController {
     }
 
     /**
-     * Swap the decoded DeArrow frame into the view with a short cross-fade from whatever the view
+     * Show the decoded DeArrow frame in the view with a short cross-fade from whatever the view
      * currently shows (normally the original thumbnail), so the change reads as a gentle switch
      * rather than an abrupt pop.
      *
      * <p>The animation lives entirely inside a {@link TransitionDrawable} -- it never touches the
      * View's alpha -- so it is safe across RecyclerView recycling: the next bind simply replaces
      * the drawable, and no view can be left stranded mid-fade. When the view has nothing to fade
-     * from (no original loaded yet) the frame is set directly.</p>
+     * from yet (no original loaded) the frame is set directly.</p>
+     *
+     * <p>The transition is pinned to the incoming frame's intrinsic size via
+     * {@link FixedSizeTransitionDrawable}. A plain {@link TransitionDrawable} is a
+     * {@link android.graphics.drawable.LayerDrawable}, whose intrinsic size is the per-dimension
+     * max of its layers; when the original and the frame differ in aspect ratio (e.g. a 4:3
+     * {@code hqdefault}/{@code sddefault} original vs a 16:9 generated frame) that synthetic size
+     * matches neither image, so the ImageView's {@code scaleType} ({@code fitCenter} on the
+     * video-detail header) would letterbox and stretch the result. Pinning the size to the frame
+     * lets {@code scaleType} fit it from its true dimensions; the outgoing image is briefly drawn
+     * to the same bounds while it fades out.</p>
      */
-    private static void crossfadeInDeArrowThumbnail(final ImageView view, final Bitmap bitmap) {
+    private static void showDeArrowThumbnail(final ImageView view, final Bitmap bitmap) {
         final Drawable from = view.getDrawable();
         final Drawable to = new BitmapDrawable(view.getResources(), bitmap);
         if (from == null) {
             view.setImageDrawable(to);
             return;
         }
-        final TransitionDrawable transition = new TransitionDrawable(new Drawable[]{from, to});
+        final TransitionDrawable transition = new FixedSizeTransitionDrawable(
+                new Drawable[]{from, to}, to.getIntrinsicWidth(), to.getIntrinsicHeight());
         transition.setCrossFadeEnabled(true);
         view.setImageDrawable(transition);
         transition.startTransition(THUMBNAIL_CROSSFADE_DURATION_MS);
+    }
+
+    /**
+     * A {@link TransitionDrawable} that reports a fixed intrinsic size (the incoming frame's)
+     * rather than the per-dimension max of its layers, so the ImageView's {@code scaleType} fits
+     * the result from the new frame's true aspect ratio even when the outgoing image has a
+     * different aspect. See {@link #showDeArrowThumbnail}.
+     */
+    private static final class FixedSizeTransitionDrawable extends TransitionDrawable {
+        private final int intrinsicWidth;
+        private final int intrinsicHeight;
+
+        FixedSizeTransitionDrawable(final Drawable[] layers,
+                                    final int intrinsicWidth, final int intrinsicHeight) {
+            super(layers);
+            this.intrinsicWidth = intrinsicWidth;
+            this.intrinsicHeight = intrinsicHeight;
+        }
+
+        @Override
+        public int getIntrinsicWidth() {
+            return intrinsicWidth;
+        }
+
+        @Override
+        public int getIntrinsicHeight() {
+            return intrinsicHeight;
+        }
     }
 
     /** Cancel any in-flight DeArrow thumbnail load so a late frame cannot touch a recycled view. */
