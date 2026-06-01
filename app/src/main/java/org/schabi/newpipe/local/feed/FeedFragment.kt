@@ -810,7 +810,8 @@ class FeedFragment : BaseStateFragment<FeedState>(), BackPressable {
                 } else {
                     NavigationHelper.openVideoDetailFragment(
                         requireContext(), fm,
-                        stream.serviceId, stream.url, stream.title, null, false
+                        stream.serviceId, stream.url, stream.title, null, false,
+                        stream.toStreamInfoItem()
                     )
                 }
             }
