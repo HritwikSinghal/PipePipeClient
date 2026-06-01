@@ -8,6 +8,22 @@ plugins {
 }
 
 android {
+    def keystorePropertiesFile = rootProject.file("keystore.properties")
+    def keystoreProperties = new Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+        signingConfigs {
+            release {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
+    } else {
+        println("Warning: keystore.properties not found; release builds will be unsigned.")
+    }
+
     compileSdk 33
 
     defaultConfig {
@@ -74,10 +90,18 @@ android {
         // debug build. This seems to be a Gradle bug, therefore
         // TODO: update Gradle version
         release {
+            // Fork (PipePipe+): distinct applicationId so it installs alongside the official app.
+            applicationIdSuffix ".plus"
+            resValue "string", "app_name", "PipePipe+"
             if (System.properties.containsKey('packageSuffix')) {
                 applicationIdSuffix System.getProperty('packageSuffix')
                 resValue "string", "app_name", "PipePipe " + System.getProperty('packageSuffix')
                 archivesBaseName = 'PipePipe_' + System.getProperty('packageSuffix')
+            }
+            // Sign with the fork release key when keystore.properties is present (CI decodes it from
+            // secrets); otherwise the release stays unsigned (e.g. F-Droid-style reproducible builds).
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
             }
             minifyEnabled true
             shrinkResources false // disabled to fix F-Droid's reproducible build
@@ -350,4 +374,65 @@ static String getGitWorkingBranch() {
         // git was not found
         return ""
     }
+}
+
+// --- Fork release versioning (additive; deliberately does NOT edit upstream's versionCode /
+// versionName lines above, so `git rebase upstream/main` never conflicts on versioning and the
+// fork tracks upstream's version automatically). CI passes -PforkVersionName / -PforkVersionCode
+// to stamp a fork-suffixed version onto a release; local/default builds inherit upstream's exact
+// version. The per-ABI versionCodeOverride logic still applies on top of the injected base code. ---
+if (project.hasProperty('forkVersionName')) {
+    android.defaultConfig.versionName = project.forkVersionName
+}
+if (project.hasProperty('forkVersionCode')) {
+    android.defaultConfig.versionCode = project.forkVersionCode.toInteger()
+}
+
+// --- Fork build-speed: ABI gating (additive; same rationale as the forkVersion block above --
+// reconfigures android.splits.abi AFTER the android{} block instead of editing upstream's splits{}
+// DSL, so `git rebase upstream/main` never conflicts here). Absent => upstream's default (per-ABI
+// armeabi-v7a/arm64-v8a/x86/x86_64 + a universal APK). A personal fork installed via Obtainium only
+// needs one APK, so trimming the unused ABIs skips their packaging + signing.
+//   -PforkAbiFilter=universal            => a single all-architecture (universal) APK only
+//   -PforkAbiFilter=arm64-v8a            => only that per-ABI APK (no universal)
+//   -PforkAbiFilter=arm64-v8a,universal  => that per-ABI APK + a universal APK
+// AGP reads the splits DSL in afterEvaluate, so end-of-script reconfiguration is honoured (the same
+// timing the per-ABI versionCodeOverride + forkVersion injection above already rely on). ---
+if (project.hasProperty('forkAbiFilter')) {
+    def requestedAbis = project.forkAbiFilter.split(',').collect { it.trim().toLowerCase() }.findAll { it }
+    def wantUniversal = requestedAbis.contains('universal')
+    def perAbi = requestedAbis.findAll { it != 'universal' }
+    if (perAbi.isEmpty()) {
+        // Universal only: one fat APK (all ABIs' native libs). Disabling per-ABI splits is faster than
+        // building every split plus a universal; keep the "-universal" filename token so Obtainium's
+        // APK filter still matches the artifact.
+        android.splits.abi.enable = false
+        android.applicationVariants.all { variant ->
+            variant.outputs.each { output ->
+                output.outputFileName = output.outputFileName.replaceFirst(
+                        "-${variant.buildType.name}\\.apk\$", "-universal-${variant.buildType.name}.apk")
+            }
+        }
+    } else {
+        android.splits.abi.reset()
+        android.splits.abi.enable = true
+        android.splits.abi.include(*perAbi)
+        android.splits.abi.universalApk = wantUniversal
+    }
+}
+
+// --- Fork build-speed: R8/minification toggle (additive; same rebase-safe rationale as the
+// forkAbiFilter + forkVersion blocks above -- reconfigures android.buildTypes.release AFTER the
+// android{} block instead of editing upstream's buildTypes{} DSL, so `git rebase upstream/main`
+// never conflicts here). Upstream sets `minifyEnabled true` (R8 shrink/obfuscate) on the release
+// build; R8 is the release-only step that makes a release build noticeably slower than a debug
+// build. A personal fork distributed via Obtainium needs neither code shrinking nor obfuscation,
+// so `-PforkMinify=false` (the CI + nix default) skips R8 to cut that cost. Absent => upstream's
+// minified release is unchanged (keeps a bare `./gradlew :app:assembleRelease` byte-for-byte
+// upstream for F-Droid reproducibility); pass -PforkMinify=true to force upstream's behaviour.
+// `shrinkResources` is already false upstream, so disabling minify needs no further change and the
+// proguardFiles simply go unused. AGP finalises buildTypes in afterEvaluate, so end-of-script
+// reconfiguration is honoured (same timing the blocks above rely on). ---
+if (project.hasProperty('forkMinify')) {
+    android.buildTypes.release.minifyEnabled = project.forkMinify.toBoolean()
 }
