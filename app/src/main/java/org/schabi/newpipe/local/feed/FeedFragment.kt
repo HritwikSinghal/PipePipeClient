@@ -93,6 +93,7 @@ import org.schabi.newpipe.util.ThemeHelper.getGridSpanCountStreams
 import org.schabi.newpipe.util.ThemeHelper.getItemViewMode
 import org.schabi.newpipe.util.ThemeHelper.resolveDrawable
 import org.schabi.newpipe.util.ThemeHelper.shouldUseGridLayout
+import org.schabi.newpipe.util.dearrow.DeArrowPrefetcher
 import java.time.OffsetDateTime
 import java.util.function.Consumer
 
@@ -837,6 +838,11 @@ class FeedFragment : BaseStateFragment<FeedState>(), BackPressable {
         // and mark the new instances
         selection.retainOnly(loadedState.items.map { it.streamWithState.stream.uid })
         loadedState.items.forEach { it.isItemSelected = selection.isSelected(it.streamWithState.stream.uid) }
+        // Warm DeArrow branding/thumbnails for the page so they are ready before the rows bind.
+        DeArrowPrefetcher.prefetch(
+            requireContext(),
+            loadedState.items.map { it.streamWithState.stream.toStreamInfoItem() }
+        )
 
         // Store original items for filtering
         originalItems.clear()

@@ -38,6 +38,7 @@ import org.schabi.newpipe.local.history.HistoryRecordManager;
 import org.schabi.newpipe.util.FallbackViewHolder;
 import org.schabi.newpipe.util.OnClickGesture;
 import org.schabi.newpipe.util.ThemeHelper;
+import org.schabi.newpipe.util.dearrow.DeArrowPrefetcher;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -209,6 +210,9 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
         notifyItemRangeInserted(offsetStart, data.size());
 
+        // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
+        DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
+
         if (showFooter) {
             final int footerNow = sizeConsideringHeaderOffset();
             notifyItemMoved(offsetStart, footerNow);
@@ -225,6 +229,9 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         infoItemList.addAll(data);
         applyFilter();
         notifyDataSetChanged();
+
+        // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
+        DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
     }
 
     /** Locally filters the loaded items by name (and uploader for streams). */
@@ -503,6 +510,18 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             return;
         }
         super.onBindViewHolder(holder, position, payloads);
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull final RecyclerView.ViewHolder holder) {
+        super.onViewRecycled(holder);
+        // Cancel any in-flight DeArrow fetch so a late result cannot write onto the recycled view.
+        // StreamGrid/CardInfoItemHolder extend StreamInfoItemHolder, so both checks cover them.
+        if (holder instanceof StreamInfoItemHolder) {
+            ((StreamInfoItemHolder) holder).disposeDeArrow();
+        } else if (holder instanceof StreamMiniInfoItemHolder) {
+            ((StreamMiniInfoItemHolder) holder).disposeDeArrow();
+        }
     }
 
     public GridLayoutManager.SpanSizeLookup getSpanSizeLookup(final int spanCount) {

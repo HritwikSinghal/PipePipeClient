@@ -17,22 +17,26 @@ import org.schabi.newpipe.ktx.ViewUtils;
 import org.schabi.newpipe.local.history.HistoryRecordManager;
 import org.schabi.newpipe.util.Localization;
 import org.schabi.newpipe.util.PicassoHelper;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 import org.schabi.newpipe.views.AnimatedProgressBar;
 
 import java.util.concurrent.TimeUnit;
 
 public class StreamMiniInfoItemHolder extends InfoItemHolder {
     public final ImageView itemThumbnailView;
+    public final ImageView dearrowBadgeView;
     public final TextView itemVideoTitleView;
     public final TextView itemUploaderView;
     public final TextView itemDurationView;
     private final AnimatedProgressBar itemProgressView;
+    private final DeArrowItemController deArrowController = new DeArrowItemController();
 
     StreamMiniInfoItemHolder(final InfoItemBuilder infoItemBuilder, final int layoutId,
                              final ViewGroup parent) {
         super(infoItemBuilder, layoutId, parent);
 
         itemThumbnailView = itemView.findViewById(R.id.itemThumbnailView);
+        dearrowBadgeView = itemView.findViewById(R.id.dearrow_badge);
         itemVideoTitleView = itemView.findViewById(R.id.itemVideoTitleView);
         itemUploaderView = itemView.findViewById(R.id.itemUploaderView);
         itemDurationView = itemView.findViewById(R.id.itemDurationView);
@@ -90,6 +94,8 @@ public class StreamMiniInfoItemHolder extends InfoItemHolder {
 
         PicassoHelper.loadScaledDownThumbnail(itemThumbnailView.getContext(), item.getThumbnailUrl())
                 .into(itemThumbnailView);
+        deArrowController.apply(itemVideoTitleView, itemThumbnailView, dearrowBadgeView,
+                item.getServiceId(), item.getUrl(), item.getName(), item.getThumbnailUrl());
 
         itemView.setOnClickListener(view -> {
             if (itemBuilder.getOnStreamSelectedListener() != null) {
@@ -109,6 +115,14 @@ public class StreamMiniInfoItemHolder extends InfoItemHolder {
                 disableLongClick();
                 break;
         }
+    }
+
+    /**
+     * Cancels any in-flight DeArrow fetch for this holder. Called when the view is recycled so a
+     * late result cannot write onto a detached view.
+     */
+    public void disposeDeArrow() {
+        deArrowController.dispose();
     }
 
     @Override

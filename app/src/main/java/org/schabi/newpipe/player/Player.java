@@ -463,6 +463,7 @@ public final class Player {
 
         historyController.clear();
         progressController.stopProgressLoop();
+        layoutController.disposeDeArrow();
         PicassoHelper.cancelTag(PicassoHelper.PLAYER_THUMBNAIL_TAG); // cancel thumbnail loading
 
         if (binding != null) {
