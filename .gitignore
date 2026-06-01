@@ -20,3 +20,7 @@ bin/
 *.code-workspace
 /config.py
 __pycache__
+
+# Fork release signing -- never commit the keystore or its passwords (CI injects them from secrets)
+keystore.properties
+*.jks
