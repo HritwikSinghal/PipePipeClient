@@ -78,7 +78,7 @@ android {
             if (true) {
                 // default values when branch name could not be determined or is master or dev
                 applicationIdSuffix ".debug"
-                resValue "string", "app_name", "PipePipe Debug"
+                resValue "string", "app_name", "PipePipeD Debug"
             } else {
                 applicationIdSuffix ".debug." + normalizedWorkingBranch
                 resValue "string", "app_name", "PipePipe " + workingBranch
@@ -90,9 +90,9 @@ android {
         // debug build. This seems to be a Gradle bug, therefore
         // TODO: update Gradle version
         release {
-            // Fork (PipePipe+): distinct applicationId so it installs alongside the official app.
-            applicationIdSuffix ".plus"
-            resValue "string", "app_name", "PipePipe+"
+            // Fork (PipePipeD): distinct applicationId so it installs alongside the official app.
+            applicationIdSuffix ".release"
+            resValue "string", "app_name", "PipePipeD"
             if (System.properties.containsKey('packageSuffix')) {
                 applicationIdSuffix System.getProperty('packageSuffix')
                 resValue "string", "app_name", "PipePipe " + System.getProperty('packageSuffix')
@@ -387,6 +387,11 @@ if (project.hasProperty('forkVersionName')) {
 if (project.hasProperty('forkVersionCode')) {
     android.defaultConfig.versionCode = project.forkVersionCode.toInteger()
 }
+
+// --- Fork (PipePipeD) install identity: override the base applicationId additively so upstream's
+// defaultConfig line stays untouched (rebase-clean; same rationale as the forkVersion block above).
+// Yields wtf.pipepiped.release / wtf.pipepiped.debug via the per-variant applicationIdSuffix. ---
+android.defaultConfig.applicationId = "wtf.pipepiped"
 
 // --- Fork build-speed: ABI gating (additive; same rationale as the forkVersion block above --
 // reconfigures android.splits.abi AFTER the android{} block instead of editing upstream's splits{}
