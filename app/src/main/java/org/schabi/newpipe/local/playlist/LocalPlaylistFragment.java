@@ -279,7 +279,8 @@ public class LocalPlaylistFragment extends BaseLocalListFragment<List<PlaylistSt
                         NavigationHelper.playOnBackgroundPlayer(activity, temp, false);
                     } else {
                         NavigationHelper.openVideoDetailFragment(requireContext(), getFM(),
-                                item.getServiceId(), item.getUrl(), item.getTitle(), null, false);
+                                item.getServiceId(), item.getUrl(), item.getTitle(), null, false,
+                                item.toStreamInfoItem());
                     }
                 }
             }
@@ -1317,8 +1318,9 @@ public class LocalPlaylistFragment extends BaseLocalListFragment<List<PlaylistSt
                             })
                     .setAction(
                             StreamDialogDefaultEntry.SHOW_STREAM_DETAILS,
-                            (f, i) -> NavigationHelper.openVideoDetailFragment(requireContext(), getFM(),
-                                    i.getServiceId(), i.getUrl(), i.getName(), null, false))
+                            (f, i) -> NavigationHelper.openVideoDetailFragment(requireContext(),
+                                    getFM(), i.getServiceId(), i.getUrl(), i.getName(), null, false,
+                                    i))
                     .create()
                     .show();
         } catch (final IllegalArgumentException e) {
