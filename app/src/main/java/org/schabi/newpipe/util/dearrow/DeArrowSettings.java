@@ -51,14 +51,16 @@ public final class DeArrowSettings {
      * Whether videos with no community-submitted thumbnail may show a random generated frame.
      *
      * <p>When off, only explicit community-submitted thumbnails replace the original; everything
-     * else keeps its original thumbnail. Implies the thumbnail-replacement toggle is on.</p>
+     * else keeps its original thumbnail. Implies the thumbnail-replacement toggle is on. Defaults
+     * to off: a random frame is frequently less representative than the channel's own thumbnail, so
+     * the fallback is opt-in.</p>
      *
      * @param context any context
      * @return {@code true} if the random-frame fallback is allowed
      */
     public static boolean isRandomThumbnailFallbackEnabled(final Context context) {
         return isThumbnailReplacementEnabled(context) && prefs(context).getBoolean(
-                context.getString(R.string.dearrow_random_thumbnails_key), true);
+                context.getString(R.string.dearrow_random_thumbnails_key), false);
     }
 
     /**
