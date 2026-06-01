@@ -7,6 +7,7 @@ import android.widget.TextView;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.schabi.newpipe.R;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 
 /**
  * Created by Christian Schabesberger on 01.08.16.
@@ -41,6 +42,8 @@ public class PlayQueueItemHolder extends RecyclerView.ViewHolder {
     final ImageView itemHandle;
 
     public final View itemRoot;
+
+    public final DeArrowItemController deArrowController = new DeArrowItemController();
 
     PlayQueueItemHolder(final View v) {
         super(v);

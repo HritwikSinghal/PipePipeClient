@@ -19,6 +19,7 @@ import androidx.preference.PreferenceManager;
 
 import org.schabi.newpipe.util.Localization;
 import org.schabi.newpipe.util.PicassoHelper;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 import org.schabi.newpipe.views.AnimatedProgressBar;
 
 import java.util.concurrent.TimeUnit;
@@ -51,11 +52,13 @@ import static org.schabi.newpipe.MainActivity.DEBUG;
 
 public class StreamInfoItemHolder extends InfoItemHolder {
     public final ImageView itemThumbnailView;
+    public final ImageView dearrowBadgeView;
     public final TextView itemVideoTitleView;
     public final TextView itemUploaderView;
     public final TextView itemDurationView;
     private final AnimatedProgressBar itemProgressView;
     public final TextView itemAdditionalDetails;
+    private final DeArrowItemController deArrowController = new DeArrowItemController();
 
     public StreamInfoItemHolder(final InfoItemBuilder infoItemBuilder, final ViewGroup parent) {
         this(infoItemBuilder, R.layout.list_stream_item, parent);
@@ -65,6 +68,7 @@ public class StreamInfoItemHolder extends InfoItemHolder {
                                 final ViewGroup parent) {
         super(infoItemBuilder, layoutId, parent);
         itemThumbnailView = itemView.findViewById(R.id.itemThumbnailView);
+        dearrowBadgeView = itemView.findViewById(R.id.dearrow_badge);
         itemVideoTitleView = itemView.findViewById(R.id.itemVideoTitleView);
         itemUploaderView = itemView.findViewById(R.id.itemUploaderView);
         itemDurationView = itemView.findViewById(R.id.itemDurationView);
@@ -119,6 +123,8 @@ public class StreamInfoItemHolder extends InfoItemHolder {
 
         PicassoHelper.loadScaledDownThumbnail(itemThumbnailView.getContext(), item.getThumbnailUrl())
                 .into(itemThumbnailView);
+        deArrowController.apply(itemVideoTitleView, itemThumbnailView, dearrowBadgeView,
+                item.getServiceId(), item.getUrl(), item.getName(), item.getThumbnailUrl());
 
         itemView.setOnClickListener(view -> {
             if (itemBuilder.getOnStreamSelectedListener() != null) {
@@ -140,6 +146,14 @@ public class StreamInfoItemHolder extends InfoItemHolder {
         }
 
         itemAdditionalDetails.setText(getStreamInfoDetailLine(item));
+    }
+
+    /**
+     * Cancels any in-flight DeArrow fetch for this holder. Called when the view is recycled so a
+     * late result cannot write onto a detached view.
+     */
+    public void disposeDeArrow() {
+        deArrowController.dispose();
     }
 
     @Override

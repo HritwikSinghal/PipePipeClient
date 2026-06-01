@@ -21,6 +21,7 @@ import org.schabi.newpipe.extractor.stream.StreamType
 import org.schabi.newpipe.ktx.animate
 import org.schabi.newpipe.ktx.animateRotation
 import org.schabi.newpipe.player.helper.PlayerHelper
+import org.schabi.newpipe.util.dearrow.DeArrowItemController
 import org.schabi.newpipe.util.external_communication.KoreUtils
 
 /**
@@ -37,6 +38,9 @@ class PlayerLayoutController(private val player: Player) {
 
     /** The cues ExoPlayer last reported; see [reapplyCues] for why they are kept. */
     private var lastCueGroup: CueGroup? = null
+
+    /** Swaps the title row to its DeArrow replacement; owned here because this owns the row. */
+    private val deArrowController = DeArrowItemController()
 
     /**
      * The constant look of the player views: the seek bar and the loading spinner tints, the
@@ -223,7 +227,13 @@ class PlayerLayoutController(private val player: Player) {
      */
     fun updateMetadataViews(info: StreamInfo) {
         player.binding.titleTextView.text = info.name
+        deArrowController.apply(player.binding.titleTextView, info.serviceId, info.url)
         player.binding.channelTextView.text = info.uploaderName
+    }
+
+    /** Cancels an in-flight DeArrow fetch: it holds the player views until it completes. */
+    fun disposeDeArrow() {
+        deArrowController.dispose()
     }
 
     fun showHideKodiButton() {

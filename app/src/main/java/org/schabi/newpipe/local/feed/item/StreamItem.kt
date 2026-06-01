@@ -6,6 +6,7 @@ import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
 import com.xwray.groupie.viewbinding.BindableItem
+import com.xwray.groupie.viewbinding.GroupieViewHolder
 import org.schabi.newpipe.MainActivity
 import org.schabi.newpipe.R
 import org.schabi.newpipe.database.stream.StreamWithState
@@ -18,6 +19,7 @@ import org.schabi.newpipe.extractor.stream.StreamType.VIDEO_STREAM
 import org.schabi.newpipe.util.Localization
 import org.schabi.newpipe.util.PicassoHelper
 import org.schabi.newpipe.util.StreamTypeUtil
+import org.schabi.newpipe.util.dearrow.DeArrowItemController
 import java.util.concurrent.TimeUnit
 import java.util.function.Consumer
 
@@ -109,10 +111,41 @@ data class StreamItem(
         PicassoHelper.loadScaledDownThumbnail(viewBinding.root.context, stream.thumbnailUrl)
             .into(viewBinding.itemThumbnailView)
 
+        // DeArrow: de-clickbait title + thumbnail and drive the interactive badge.
+        // The controller is stored on the recycled view (not on this per-video item) so its
+        // boundVideoId guard stays correct across recycling — mirrors StreamInfoItemHolder.
+        deArrowController(viewBinding).apply(
+            viewBinding.itemVideoTitleView,
+            viewBinding.itemThumbnailView,
+            viewBinding.dearrowBadge,
+            stream.serviceId,
+            stream.url,
+            stream.title,
+            stream.thumbnailUrl
+        )
+
         viewBinding.itemAdditionalDetails.text =
             getStreamInfoDetailLine(viewBinding.itemAdditionalDetails.context)
 
         execBindEnd?.accept(viewBinding)
+    }
+
+    /**
+     * Returns the [DeArrowItemController] bound to this recycled view, creating one on first use.
+     * Stored as a view tag rather than an item field because Groupie reuses a single view across
+     * many [StreamItem]s — a per-item controller would let a late fetch write onto the wrong row.
+     */
+    private fun deArrowController(viewBinding: ListStreamItemBinding): DeArrowItemController {
+        val root = viewBinding.root
+        return (root.getTag(R.id.dearrow_controller) as? DeArrowItemController)
+            ?: DeArrowItemController().also { root.setTag(R.id.dearrow_controller, it) }
+    }
+
+    override fun unbind(viewHolder: GroupieViewHolder<ListStreamItemBinding>) {
+        super.unbind(viewHolder)
+        // Cancel any in-flight DeArrow fetch tied to this recycled view so a late result cannot
+        // write onto a detached view. The controller lives on the view tag (see deArrowController).
+        (viewHolder.root.getTag(R.id.dearrow_controller) as? DeArrowItemController)?.dispose()
     }
 
     override fun isLongClickable() = when (stream.streamType) {

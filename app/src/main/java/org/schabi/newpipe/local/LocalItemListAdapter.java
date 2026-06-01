@@ -13,12 +13,14 @@ import org.schabi.newpipe.R;
 import org.schabi.newpipe.database.LocalItem;
 import org.schabi.newpipe.database.playlist.PlaylistStreamEntry;
 import org.schabi.newpipe.database.stream.StreamStatisticsEntry;
+import org.schabi.newpipe.database.stream.model.StreamEntity;
 import org.schabi.newpipe.database.stream.model.StreamStateEntity;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.info_list.ItemViewMode;
 import org.schabi.newpipe.local.history.HistoryRecordManager;
 import org.schabi.newpipe.local.holder.*;
 import org.schabi.newpipe.util.*;
+import org.schabi.newpipe.util.dearrow.DeArrowPrefetcher;
 
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
@@ -129,8 +131,35 @@ public class LocalItemListAdapter extends RecyclerView.Adapter<RecyclerView.View
                     + "header = " + header + ", footer = " + footer + ", "
                     + "showFooter = " + showFooter);
         }
-        
+
+        // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
+        final List<StreamInfoItem> streams = new ArrayList<>();
+        for (final LocalItem item : data) {
+            final StreamEntity entity = streamEntityOf(item);
+            if (entity != null) {
+                streams.add(entity.toStreamInfoItem());
+            }
+        }
+        if (!streams.isEmpty()) {
+            DeArrowPrefetcher.prefetch(localItemBuilder.getContext(), streams);
+        }
+
         notifyDataSetChanged();
+    }
+
+    /**
+     * The {@link StreamEntity} backing a stream-bearing local item (history/most-played or a local
+     * playlist entry), or {@code null} for non-stream items such as playlists.
+     */
+    @Nullable
+    private static StreamEntity streamEntityOf(final LocalItem item) {
+        if (item instanceof StreamStatisticsEntry) {
+            return ((StreamStatisticsEntry) item).getStreamEntity();
+        }
+        if (item instanceof PlaylistStreamEntry) {
+            return ((PlaylistStreamEntry) item).getStreamEntity();
+        }
+        return null;
     }
 
     public void removeItem(final LocalItem data) {
@@ -431,6 +460,18 @@ public class LocalItemListAdapter extends RecyclerView.Adapter<RecyclerView.View
             }
         } else {
             onBindViewHolder(holder, position);
+        }
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull final RecyclerView.ViewHolder holder) {
+        super.onViewRecycled(holder);
+        // Cancel any in-flight DeArrow fetch so a late result cannot write onto the recycled view.
+        // The grid/card variants extend these base holders, so both checks cover them.
+        if (holder instanceof LocalStatisticStreamItemHolder) {
+            ((LocalStatisticStreamItemHolder) holder).disposeDeArrow();
+        } else if (holder instanceof LocalPlaylistStreamItemHolder) {
+            ((LocalPlaylistStreamItemHolder) holder).disposeDeArrow();
         }
     }
 
