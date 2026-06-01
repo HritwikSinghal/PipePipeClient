@@ -215,6 +215,10 @@ public final class VideoDetailFragment
 
     @Nullable
     private StreamInfo currentInfo = null;
+    // The list item the user tapped, if any. Used to render the detail header instantly while
+    // the full StreamInfo is still being fetched. Consumed (and cleared) once the fetch resolves.
+    @Nullable
+    private StreamInfoItem previewInfoItem = null;
     private Disposable currentWorker;
     private final DeArrowItemController deArrowController = new DeArrowItemController();
     @NonNull
@@ -983,12 +987,22 @@ public final class VideoDetailFragment
                                    @Nullable final String newUrl,
                                    @NonNull final String newTitle,
                                    @Nullable final PlayQueue newQueue) {
+        selectAndLoadVideo(newServiceId, newUrl, newTitle, newQueue, null);
+    }
+
+    public void selectAndLoadVideo(final int newServiceId,
+                                   @Nullable final String newUrl,
+                                   @NonNull final String newTitle,
+                                   @Nullable final PlayQueue newQueue,
+                                   @Nullable final StreamInfoItem preview) {
         if (isPlayerAvailable() && newQueue != null && playQueue != null
                 && playQueue.getItem() != null && !playQueue.getItem().getUrl().equals(newUrl)) {
             // Preloading can be disabled since playback is surely being replaced.
             player.disablePreloadingOfCurrentTrack();
         }
 
+        // Stash the tapped item so showLoading() can render the header immediately.
+        previewInfoItem = preview;
         setInitialData(newServiceId, newUrl, newTitle, newQueue);
         startLoading(false, true);
     }
@@ -1716,6 +1730,8 @@ public final class VideoDetailFragment
         // hide comments / related streams / description tabs
         binding.viewPager.setVisibility(View.GONE);
         binding.tabLayout.setVisibility(View.GONE);
+
+        previewInfoItem = null;
     }
 
     private void setupBroadcastReceiver() {
@@ -1779,6 +1795,16 @@ public final class VideoDetailFragment
 
         super.showLoading();
 
+        // If we were handed the tapped list item and it matches what we're loading, render its
+        // metadata (thumbnail, duration, title, uploader, views) instantly instead of blanking
+        // the page. Only the parts that need the network fetch stay hidden until handleResult().
+        final StreamInfoItem preview = previewInfoItem;
+        if (preview != null && preview.getUrl() != null && preview.getUrl().equals(url)
+                && !ExtractorHelper.isCached(serviceId, url, InfoItem.InfoType.STREAM)) {
+            showHeaderPreview(preview, shouldEllipsize);
+            return;
+        }
+
         //if data is already cached, transition from VISIBLE -> INVISIBLE -> VISIBLE is not required
         if (!ExtractorHelper.isCached(serviceId, url, InfoItem.InfoType.STREAM)) {
             binding.detailContentRootHiding.setVisibility(View.INVISIBLE);
@@ -1809,6 +1835,116 @@ public final class VideoDetailFragment
         PicassoHelper.cancelTag(PICASSO_VIDEO_DETAILS_TAG);
         binding.detailThumbnailImageView.setImageBitmap(null);
         binding.detailSubChannelThumbnailView.setImageBitmap(null);
+    }
+
+    /**
+     * Render the detail header instantly from the tapped list item while the full
+     * {@link StreamInfo} is still being fetched. Only the metadata already carried by the item is
+     * shown; everything that needs the network (description/related/comments, play button,
+     * like/dislike, controls) stays hidden and is filled in by {@link #handleResult(StreamInfo)}.
+     */
+    private void showHeaderPreview(@NonNull final StreamInfoItem item,
+                                   final boolean shouldEllipsize) {
+        // Title (same as the regular loading path).
+        binding.detailVideoTitleView.setText(title);
+        binding.detailVideoTitleView.setMaxLines(shouldEllipsize ? 1 : 10);
+        animate(binding.detailVideoTitleView, true, 0);
+
+        // The rendered header is the loading affordance; hide the global spinner, which would
+        // otherwise overlap the metadata row now that the content root stays visible.
+        animate(binding.loadingProgressBar, false, 0);
+
+        // Keep the body container visible and pre-fill what we already know.
+        binding.detailContentRootHiding.setVisibility(View.VISIBLE);
+
+        // Thumbnail: usually a Picasso cache hit from the feed, so it shows immediately. Use the
+        // same request handleResult() uses so the cache aligns and there is no later flicker; do
+        // not clear the bitmap, just cancel any previous video's pending load.
+        PicassoHelper.cancelTag(PICASSO_VIDEO_DETAILS_TAG);
+        PicassoHelper.loadScaledDownThumbnail(getContext(), item.getThumbnailUrl())
+                .tag(PICASSO_VIDEO_DETAILS_TAG)
+                .into(binding.detailThumbnailImageView);
+
+        // Play button and resume position aren't available until the streams are resolved.
+        animate(binding.detailThumbnailPlayButton, false, 50);
+        animate(binding.detailPositionView, false, 100);
+        animate(binding.positionView, false, 50);
+
+        // Duration (mirrors handleResult()'s duration block).
+        if (item.getDuration() > 0) {
+            binding.detailDurationView.setText(
+                    Localization.getDurationString(item.getDuration()));
+            binding.detailDurationView.setBackgroundColor(
+                    ContextCompat.getColor(activity, R.color.duration_background_color));
+            animate(binding.detailDurationView, true, 100);
+        } else if (item.getStreamType() == StreamType.LIVE_STREAM) {
+            binding.detailDurationView.setText(R.string.duration_live);
+            binding.detailDurationView.setBackgroundColor(
+                    ContextCompat.getColor(activity, R.color.live_duration_background_color));
+            animate(binding.detailDurationView, true, 100);
+        } else {
+            animate(binding.detailDurationView, false, 100);
+        }
+
+        // Uploader name (mirrors displayUploaderAsSubChannel(): the channel name goes in the
+        // sub-channel view; the uploader view normally holds the subscriber count we lack here).
+        if (!isEmpty(item.getUploaderName())) {
+            binding.detailSubChannelTextView.setText(item.getUploaderName());
+            binding.detailSubChannelTextView.setVisibility(View.VISIBLE);
+            binding.detailSubChannelTextView.setSelected(true);
+            binding.detailUploaderTextView.setVisibility(View.GONE);
+            binding.detailSubChannelThumbnailView.setVisibility(View.GONE);
+            binding.detailUploaderThumbnailView.setImageDrawable(
+                    AppCompatResources.getDrawable(activity, R.drawable.buddy));
+            binding.detailUploaderThumbnailView.setVisibility(View.VISIBLE);
+        } else {
+            binding.detailSubChannelTextView.setVisibility(View.GONE);
+            binding.detailUploaderTextView.setVisibility(View.GONE);
+            binding.detailSubChannelThumbnailView.setVisibility(View.GONE);
+            binding.detailUploaderThumbnailView.setVisibility(View.GONE);
+        }
+
+        // View count (mirrors handleResult()'s view-count block).
+        if (item.getViewCount() >= 0) {
+            if (item.getStreamType() == StreamType.AUDIO_LIVE_STREAM) {
+                binding.detailViewCountView.setText(
+                        Localization.listeningCount(activity, item.getViewCount()));
+            } else if (item.getStreamType() == StreamType.LIVE_STREAM) {
+                binding.detailViewCountView.setText(
+                        Localization.localizeWatchingCount(activity, item.getViewCount()));
+            } else {
+                binding.detailViewCountView.setText(
+                        Localization.localizeViewCount(activity, item.getViewCount()));
+            }
+            binding.detailViewCountView.setVisibility(View.VISIBLE);
+        } else {
+            binding.detailViewCountView.setVisibility(View.GONE);
+        }
+
+        // Gate everything that still needs the network fetch (handleResult() restores these).
+        binding.detailThumbsUpImgView.setVisibility(View.GONE);
+        binding.detailThumbsUpCountView.setVisibility(View.GONE);
+        binding.detailThumbsDownImgView.setVisibility(View.GONE);
+        binding.detailThumbsDownCountView.setVisibility(View.GONE);
+        binding.detailThumbsDisabledView.setVisibility(View.GONE);
+        binding.detailControlPanel.setVisibility(View.GONE);
+        binding.detailSecondaryControlPanel.setVisibility(View.GONE);
+        binding.detailToggleSecondaryControlsView.setVisibility(View.GONE);
+        binding.detailTitleRootLayout.setClickable(false);
+        binding.detailMetaInfoTextView.setVisibility(View.GONE);
+        binding.detailMetaInfoSeparator.setVisibility(View.GONE);
+        binding.viewPager.setVisibility(View.GONE);
+        binding.tabLayout.setVisibility(View.GONE);
+
+        if (binding.relatedItemsLayout != null) {
+            if (showRelatedItems) {
+                binding.relatedItemsLayout.setVisibility(
+                        isPlayerAvailable() && player.isFullscreen()
+                                ? View.GONE : View.INVISIBLE);
+            } else {
+                binding.relatedItemsLayout.setVisibility(View.GONE);
+            }
+        }
     }
 
     @Override
@@ -1901,6 +2037,10 @@ public final class VideoDetailFragment
         }
 
         binding.detailTitleRootLayout.setClickable(true);
+        // Restore the primary controls: the preview path hides them while currentInfo is null
+        // (their click listeners dereference it); everything else here is set per real data.
+        binding.detailControlPanel.setVisibility(View.VISIBLE);
+        previewInfoItem = null;
         binding.detailToggleSecondaryControlsView.setRotation(0);
         binding.detailToggleSecondaryControlsView.setVisibility(View.VISIBLE);
         binding.detailSecondaryControlPanel.setVisibility(View.GONE);
