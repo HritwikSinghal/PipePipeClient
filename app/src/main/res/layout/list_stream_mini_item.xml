@@ -77,4 +77,21 @@
         android:layout_marginTop="-2dp"
         android:progressDrawable="?progress_horizontal_drawable" />
 
+    <ImageView
+        android:id="@+id/dearrow_badge"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:layout_alignTop="@id/itemThumbnailView"
+        android:layout_alignStart="@id/itemThumbnailView"
+        android:layout_alignLeft="@id/itemThumbnailView"
+        android:layout_marginStart="3dp"
+        android:layout_marginLeft="3dp"
+        android:layout_marginTop="3dp"
+        android:padding="3dp"
+        android:background="@drawable/background_oval_black_transparent"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_dearrow_badge_active"
+        android:contentDescription="@string/dearrow"
+        android:visibility="gone" />
+
 </RelativeLayout>

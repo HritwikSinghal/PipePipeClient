@@ -17,6 +17,7 @@ import org.schabi.newpipe.local.LocalItemBuilder;
 import org.schabi.newpipe.local.history.HistoryRecordManager;
 import org.schabi.newpipe.util.PicassoHelper;
 import org.schabi.newpipe.util.Localization;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 import org.schabi.newpipe.views.AnimatedProgressBar;
 
 import java.time.format.DateTimeFormatter;
@@ -44,12 +45,14 @@ import java.util.concurrent.TimeUnit;
 
 public class LocalStatisticStreamItemHolder extends LocalItemHolder {
     public final ImageView itemThumbnailView;
+    public final ImageView dearrowBadgeView;
     public final TextView itemVideoTitleView;
     public final TextView itemUploaderView;
     public final TextView itemDurationView;
     @Nullable
     public final TextView itemAdditionalDetails;
     private final AnimatedProgressBar itemProgressView;
+    private final DeArrowItemController deArrowController = new DeArrowItemController();
 
     public LocalStatisticStreamItemHolder(final LocalItemBuilder itemBuilder,
                                           final ViewGroup parent) {
@@ -61,6 +64,7 @@ public class LocalStatisticStreamItemHolder extends LocalItemHolder {
         super(infoItemBuilder, layoutId, parent);
 
         itemThumbnailView = itemView.findViewById(R.id.itemThumbnailView);
+        dearrowBadgeView = itemView.findViewById(R.id.dearrow_badge);
         itemVideoTitleView = itemView.findViewById(R.id.itemVideoTitleView);
         itemUploaderView = itemView.findViewById(R.id.itemUploaderView);
         itemDurationView = itemView.findViewById(R.id.itemDurationView);
@@ -116,6 +120,9 @@ public class LocalStatisticStreamItemHolder extends LocalItemHolder {
         // Default thumbnail is shown on error, while loading and if the url is empty
         PicassoHelper.loadScaledDownThumbnail(itemThumbnailView.getContext(), item.getStreamEntity().getThumbnailUrl())
                 .into(itemThumbnailView);
+        deArrowController.apply(itemVideoTitleView, itemThumbnailView, dearrowBadgeView,
+                item.getStreamEntity().getServiceId(), item.getStreamEntity().getUrl(),
+                item.getStreamEntity().getTitle(), item.getStreamEntity().getThumbnailUrl());
 
         itemView.setOnClickListener(view -> {
             if (itemBuilder.getOnItemSelectedListener() != null) {
@@ -130,6 +137,14 @@ public class LocalStatisticStreamItemHolder extends LocalItemHolder {
             }
             return true;
         });
+    }
+
+    /**
+     * Cancels any in-flight DeArrow fetch for this holder. Called when the view is recycled so a
+     * late result cannot write onto a detached view.
+     */
+    public void disposeDeArrow() {
+        deArrowController.dispose();
     }
 
     @Override

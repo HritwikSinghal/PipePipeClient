@@ -27,6 +27,7 @@ import org.schabi.newpipe.extractor.InfoItem;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.stream.StreamType;
 import org.schabi.newpipe.player.helper.PlayerHolder;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 import org.schabi.newpipe.util.external_communication.KoreUtils;
 
 import java.util.ArrayList;
@@ -60,6 +61,8 @@ public final class InfoItemDialog {
 
         final TextView titleView = bannerView.findViewById(R.id.itemTitleView);
         titleView.setText(info.getName());
+        final DeArrowItemController controller = new DeArrowItemController();
+        controller.apply(titleView, info.getServiceId(), info.getUrl());
 
         final TextView detailsView = bannerView.findViewById(R.id.itemAdditionalDetails);
         if (info.getUploaderName() != null) {
@@ -87,6 +90,9 @@ public final class InfoItemDialog {
                 .setCustomTitle(bannerView)
                 .setItems(items, action)
                 .create();
+        // Fork (PipePipeD): release the DeArrow subscription whenever the dialog goes away --
+        // including via upstream's lifecycle observer below, which dismisses it on view destroy.
+        dialog.setOnDismissListener(dialogInterface -> controller.dispose());
 
         final Lifecycle viewLifecycle = fragment.getViewLifecycleOwner().getLifecycle();
         viewLifecycle.addObserver(new DefaultLifecycleObserver() {
@@ -96,7 +102,6 @@ public final class InfoItemDialog {
                 viewLifecycle.removeObserver(this);
             }
         });
-
     }
 
     public void show() {

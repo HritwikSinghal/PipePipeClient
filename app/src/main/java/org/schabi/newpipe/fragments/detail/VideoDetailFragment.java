@@ -99,6 +99,7 @@ import org.schabi.newpipe.player.playqueue.PlayQueueItem;
 import org.schabi.newpipe.player.playqueue.SinglePlayQueue;
 import org.schabi.newpipe.sleep.SleepTimerService;
 import org.schabi.newpipe.util.*;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 import org.schabi.newpipe.util.external_communication.KoreUtils;
 import org.schabi.newpipe.util.external_communication.ShareUtils;
 
@@ -215,6 +216,7 @@ public final class VideoDetailFragment
     @Nullable
     private StreamInfo currentInfo = null;
     private Disposable currentWorker;
+    private final DeArrowItemController deArrowController = new DeArrowItemController();
     @NonNull
     private final CompositeDisposable disposables = new CompositeDisposable();
     @Nullable
@@ -464,6 +466,8 @@ public final class VideoDetailFragment
 
     @Override
     public void onDestroyView() {
+        deArrowController.dispose();
+        moveThumbnailToContainer(binding.detailThumbnailContainer);
         super.onDestroyView();
         binding = null;
     }
@@ -1943,6 +1947,9 @@ public final class VideoDetailFragment
         }
         updateProgressInfo(info);
         initThumbnailViews(info);
+        deArrowController.apply(binding.detailVideoTitleView, binding.detailThumbnailImageView,
+                binding.dearrowBadge, info.getServiceId(), url, info.getName(),
+                info.getThumbnailUrl());
         showMetaInfoInTextView(info.getMetaInfo(), binding.detailMetaInfoTextView,
                 binding.detailMetaInfoSeparator, disposables);
 

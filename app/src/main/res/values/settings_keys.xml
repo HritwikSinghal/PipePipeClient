@@ -469,6 +469,16 @@
     <string name="update_expiry_key">update_expiry_key</string>
 
 
+    <!-- DeArrow -->
+    <string name="dearrow_enable_key" translatable="false">dearrow_enable</string>
+    <string name="dearrow_replace_titles_key" translatable="false">dearrow_replace_titles</string>
+    <string name="dearrow_auto_format_titles_key" translatable="false">dearrow_auto_format_titles</string>
+    <string name="dearrow_mark_replaced_titles_key" translatable="false">dearrow_mark_replaced_titles</string>
+    <string name="dearrow_replace_thumbnails_key" translatable="false">dearrow_replace_thumbnails</string>
+    <string name="dearrow_random_thumbnails_key" translatable="false">dearrow_random_thumbnails</string>
+    <string name="dearrow_home_page_key" translatable="false">dearrow_home_page</string>
+    <string name="dearrow_privacy_key" translatable="false">dearrow_privacy</string>
+
     <!-- SponsorBlock -->
     <string name="sponsor_block_home_page_key" translatable="false">sponsor_block_home_page</string>
     <string name="sponsor_block_enable_key" translatable="false">sponsor_block_enable</string>
