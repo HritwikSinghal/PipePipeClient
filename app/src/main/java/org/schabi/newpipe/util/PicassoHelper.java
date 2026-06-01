@@ -16,6 +16,7 @@ import com.squareup.picasso.RequestCreator;
 import com.squareup.picasso.Target;
 import com.squareup.picasso.Transformation;
 
+import org.schabi.newpipe.BuildConfig;
 import org.schabi.newpipe.R;
 
 import java.io.File;
@@ -99,6 +100,12 @@ public final class PicassoHelper {
                 .downloader(new OkHttp3Downloader(picassoDownloaderClient)) // disk cache
                 .defaultBitmapConfig(Bitmap.Config.RGB_565)
                 .build();
+
+        if (BuildConfig.DEBUG) {
+            // Diagnostic: show the per-image source ribbon (green=memory, blue=disk, red=network)
+            // so DeArrow thumbnail cache hits vs cold generations are visible while scrolling.
+            picassoInstance.setIndicatorsEnabled(true);
+        }
     }
 
     public static void terminate() {
@@ -168,6 +175,60 @@ public final class PicassoHelper {
         final RequestCreator requestCreator = loadImageDefault(url, R.drawable.dummy_thumbnail)
                 .transform(transformation);
         return shouldSetTag ? requestCreator.tag(PLAYER_THUMBNAIL_TAG) : requestCreator;
+    }
+
+    /**
+     * Load a DeArrow replacement thumbnail into an off-view {@link Target} that decodes the frame
+     * before it is shown, so the visible {@link android.widget.ImageView} is never disturbed unless
+     * a real frame actually arrives.
+     *
+     * <p>The DeArrow thumbnail generator returns {@code 204 No Content} ("not generated yet") for
+     * frames it has not produced server-side. A 204 is an HTTP <em>success</em> with an empty body,
+     * so a {@code fetch()} reports {@code onSuccess} and a subsequent {@code into(view)} would
+     * cancel the in-flight original load on that view and then render nothing -- leaving the view
+     * permanently blank. Loading into a {@link Target} instead (a) never targets the live view, so
+     * the original load is left running, and (b) delivers a decoded {@link Bitmap} to
+     * {@code onBitmapLoaded} only for a real image; a 204/empty body (or any error) fails to decode
+     * and routes to {@code onBitmapFailed}, letting the caller keep the original. The
+     * {@code transform} matches {@link #prefetchDeArrowThumbnail} so a prefetched frame resolves
+     * from cache.</p>
+     *
+     * @param url    the DeArrow thumbnail-generator URL
+     * @param target the off-view target that receives the decoded frame; the caller must hold a
+     *               strong reference to it (Picasso keeps targets weakly)
+     */
+    public static void loadDeArrowThumbnailInto(final String url, final Target target) {
+        picassoInstance.load(url)
+                .transform(transformation)
+                .into(target);
+    }
+
+    /**
+     * Cancel an in-flight DeArrow thumbnail load for a target (e.g. on recycle/teardown).
+     *
+     * @param target the target previously passed to {@link #loadDeArrowThumbnailInto}
+     */
+    public static void cancelDeArrowThumbnail(final Target target) {
+        picassoInstance.cancelRequest(target);
+    }
+
+    /**
+     * Warm Picasso's cache with a DeArrow thumbnail ahead of binding, without a target view.
+     *
+     * <p>Uses the same {@code transform} as {@link #loadDeArrowThumbnailInto} so the cache key
+     * matches: a later {@code loadDeArrowThumbnailInto(url, target)} then resolves from cache with
+     * no network round-trip and no cold server-side generation. No-op when images are disabled or
+     * the URL is blank.</p>
+     *
+     * @param url the DeArrow thumbnail-generator URL
+     */
+    public static void prefetchDeArrowThumbnail(final String url) {
+        if (!shouldLoadImages || isBlank(url)) {
+            return;
+        }
+        picassoInstance.load(url)
+                .transform(transformation)
+                .fetch();
     }
 
     public static RequestCreator loadOrigin(final String url) {

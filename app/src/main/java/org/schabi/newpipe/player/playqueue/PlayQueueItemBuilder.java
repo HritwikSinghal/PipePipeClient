@@ -24,6 +24,8 @@ public class PlayQueueItemBuilder {
         if (!TextUtils.isEmpty(item.getTitle())) {
             holder.itemVideoTitleView.setText(item.getTitle());
         }
+        holder.deArrowController.apply(holder.itemVideoTitleView,
+                item.getServiceId(), item.getUrl());
         holder.itemAdditionalDetailsView.setText(Localization.concatenateStrings(item.getUploader(),
                 NewPipe.getNameOfService(item.getServiceId())));
 
