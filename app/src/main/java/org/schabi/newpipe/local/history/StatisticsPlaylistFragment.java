@@ -165,7 +165,8 @@ public class StatisticsPlaylistFragment
                     final StreamEntity item =
                             ((StreamStatisticsEntry) selectedItem).getStreamEntity();
                     NavigationHelper.openVideoDetailFragment(requireContext(), getFM(),
-                            item.getServiceId(), item.getUrl(), item.getTitle(), null, false);
+                            item.getServiceId(), item.getUrl(), item.getTitle(), null, false,
+                            item.toStreamInfoItem());
                 }
             }
 
