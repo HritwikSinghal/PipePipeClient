@@ -23,6 +23,7 @@ import org.schabi.newpipe.extractor.downloader.Downloader;
 import org.schabi.newpipe.ktx.ExceptionUtils;
 import org.schabi.newpipe.settings.NewPipeSettings;
 import org.schabi.newpipe.util.*;
+import org.schabi.newpipe.util.dearrow.DeArrowService;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -126,6 +127,10 @@ public class App extends MultiDexApplication {
                 prefs.getBoolean(getString(R.string.download_thumbnail_key), true));
         PicassoHelper.setIndicatorsEnabled(DEBUG
                 && prefs.getBoolean(getString(R.string.show_image_indicators_key), false));
+
+        // Enable the DeArrow persistent (disk) branding cache so de-clickbait titles/thumbnails
+        // survive app restarts and render instantly on a cold start.
+        DeArrowService.getInstance().init(this);
 
         configureRxJavaErrorHandler();
     }

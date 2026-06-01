@@ -15,6 +15,7 @@ import org.schabi.newpipe.util.DeviceUtils;
 import org.schabi.newpipe.util.NavigationHelper;
 import org.schabi.newpipe.util.PicassoHelper;
 import org.schabi.newpipe.util.ServiceHelper;
+import org.schabi.newpipe.util.dearrow.DeArrowService;
 
 import java.io.IOException;
 
@@ -29,6 +30,7 @@ public class AdvancedSettingsFragment extends BasePreferenceFragment implements 
                     PicassoHelper.setShouldLoadImages((Boolean) newValue);
                     try {
                         PicassoHelper.clearCache(preference.getContext());
+                        DeArrowService.getInstance().clearDiskCache();
                         Toast.makeText(preference.getContext(),
                                 R.string.thumbnail_cache_wipe_complete_notice, Toast.LENGTH_SHORT)
                                 .show();

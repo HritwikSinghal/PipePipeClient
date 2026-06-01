@@ -662,6 +662,26 @@
 <string name="feed_toggle_show_played_items">Show watched items</string>
 <string name="feed_fetch_channel_tabs">Fetch channel tabs</string>
 <string name="feed_fetch_channel_tabs_summary">Tabs to fetch when updating the feed. This option has no effect if a channel is updated using fast mode.</string>
+<!-- DeArrow -->
+<string name="dearrow">DeArrow</string>
+<string name="dearrow_home_page_title">View Website</string>
+<string name="dearrow_home_page_summary">Learn more about DeArrow.</string>
+<string name="dearrow_homepage_url" translatable="false">https://dearrow.ajay.app/</string>
+<string name="dearrow_privacy_title">View Privacy Policy</string>
+<string name="dearrow_privacy_summary">View DeArrow\'s privacy policy.</string>
+<string name="dearrow_privacy_policy_url" translatable="false">https://dearrow.ajay.app/privacy</string>
+<string name="dearrow_enable_title">Enable DeArrow</string>
+<string name="dearrow_enable_summary">Replace clickbait titles with crowdsourced ones on YouTube.</string>
+<string name="dearrow_replace_titles_title">Replace titles</string>
+<string name="dearrow_replace_titles_summary">Show DeArrow community titles in place of the original.</string>
+<string name="dearrow_auto_format_titles_title">Auto-format titles</string>
+<string name="dearrow_auto_format_titles_summary">Convert titles that are SHOUTING to title case.</string>
+<string name="dearrow_mark_replaced_titles_title">Mark replaced titles</string>
+<string name="dearrow_mark_replaced_titles_summary">Show a small icon next to titles changed by DeArrow.</string>
+<string name="dearrow_replace_thumbnails_title">Replace thumbnails</string>
+<string name="dearrow_replace_thumbnails_summary">Show DeArrow community thumbnails in place of the original.</string>
+<string name="dearrow_random_thumbnails_title">Use random video frames</string>
+<string name="dearrow_random_thumbnails_summary">For videos with no community thumbnail, show a random frame from the video. Turn off to replace only community-submitted thumbnails and keep the original everywhere else.</string>
 <string name="sponsor_block">SponsorBlock</string>
 <string name="sponsor_block_category_sponsor">Sponsor</string>
 <string name="sponsor_block_category_intro">Intermission/Intro Animation</string>

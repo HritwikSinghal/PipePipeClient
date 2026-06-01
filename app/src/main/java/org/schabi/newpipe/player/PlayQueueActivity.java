@@ -36,6 +36,7 @@ import org.schabi.newpipe.player.playqueue.PlayQueueItemBuilder;
 import org.schabi.newpipe.player.playqueue.PlayQueueItemHolder;
 import org.schabi.newpipe.player.playqueue.PlayQueueItemTouchCallback;
 import org.schabi.newpipe.util.*;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 
 public final class PlayQueueActivity extends AppCompatActivity
         implements PlayerEventListener, SeekBar.OnSeekBarChangeListener,
@@ -51,6 +52,7 @@ public final class PlayQueueActivity extends AppCompatActivity
     private ServiceConnection serviceConnection;
 
     private boolean seeking;
+    private final DeArrowItemController deArrowController = new DeArrowItemController();
 
     ////////////////////////////////////////////////////////////////////////////
     // Views
@@ -490,6 +492,8 @@ public final class PlayQueueActivity extends AppCompatActivity
     public void onMetadataUpdate(final StreamInfo info, final PlayQueue queue) {
         if (info != null) {
             queueControlBinding.songName.setText(info.getName());
+            deArrowController.apply(queueControlBinding.songName,
+                    info.getServiceId(), info.getUrl());
             queueControlBinding.artistName.setText(info.getUploaderName());
 
             queueControlBinding.endTime.setVisibility(View.GONE);
