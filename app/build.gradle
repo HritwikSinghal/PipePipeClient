@@ -293,6 +293,9 @@ dependencies {
     androidTestImplementation 'androidx.test:runner:1.7.0'
     androidTestImplementation 'androidx.test.ext:junit:1.3.0'
     androidTestImplementation 'junit:junit:4.13.2'
+
+/** Fork (PipePipeD): JVM unit tests (DeArrow pure-core suite under src/test) **/
+    testImplementation 'junit:junit:4.13.2'
 }
 
 static String getGitWorkingBranch() {

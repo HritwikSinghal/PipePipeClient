@@ -158,6 +158,7 @@ import org.schabi.newpipe.player.seekbarpreview.SeekbarPreviewThumbnailHelper;
 import org.schabi.newpipe.player.seekbarpreview.SeekbarPreviewThumbnailHolder;
 import org.schabi.newpipe.sleep.SleepTimerService;
 import org.schabi.newpipe.util.*;
+import org.schabi.newpipe.util.dearrow.DeArrowItemController;
 import org.schabi.newpipe.util.external_communication.KoreUtils;
 import org.schabi.newpipe.util.external_communication.ShareUtils;
 import org.schabi.newpipe.views.ExpandableSurfaceView;
@@ -261,6 +262,7 @@ public final class Player implements
     @Nullable private PlayQueueItem currentItem;
     @Nullable private MediaItemTag currentMetadata;
     @Nullable private Bitmap currentThumbnail;
+    private final DeArrowItemController deArrowController = new DeArrowItemController();
 
     /*//////////////////////////////////////////////////////////////////////////
     // Player
@@ -1052,6 +1054,7 @@ public final class Player implements
 
         databaseUpdateDisposable.clear();
         progressUpdateDisposable.set(null);
+        deArrowController.dispose();
         PicassoHelper.cancelTag(PicassoHelper.PLAYER_THUMBNAIL_TAG); // cancel thumbnail loading
 
         if (binding != null) {
@@ -3733,6 +3736,7 @@ case ERROR_CODE_DECODER_INIT_FAILED: {
         startBCPlayer();
 
         binding.titleTextView.setText(info.getName());
+        deArrowController.apply(binding.titleTextView, info.getServiceId(), info.getUrl());
         binding.channelTextView.setText(info.getUploaderName());
 
         this.seekbarPreviewThumbnailHolder.resetFrom(this.getContext(), info.getPreviewFrames());

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Tag key used to attach a per-view DeArrowItemController to a recycled feed row.
+      Groupie StreamItem instances are per-video, but their underlying view is recycled
+      across videos; storing the controller on the view (not the item) keeps the
+      boundVideoId guard correct so a late async result never lands on the wrong row.
+    -->
+    <item name="dearrow_controller" type="id" />
+</resources>
