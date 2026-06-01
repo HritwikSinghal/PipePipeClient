@@ -61,7 +61,7 @@
         <SwitchPreference
             app:iconSpaceReserved="false"
             android:dependency="@string/dearrow_replace_thumbnails_key"
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:key="@string/dearrow_random_thumbnails_key"
             android:summary="@string/dearrow_random_thumbnails_summary"
             android:title="@string/dearrow_random_thumbnails_title"/>
