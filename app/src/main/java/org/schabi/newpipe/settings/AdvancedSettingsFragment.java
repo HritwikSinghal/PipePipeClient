@@ -18,7 +18,6 @@ import org.schabi.newpipe.util.DeviceUtils;
 import org.schabi.newpipe.util.NavigationHelper;
 import org.schabi.newpipe.util.PicassoHelper;
 import org.schabi.newpipe.util.ServiceHelper;
-import org.schabi.newpipe.util.dearrow.DeArrowService;
 
 import java.io.IOException;
 
@@ -32,8 +31,13 @@ public class AdvancedSettingsFragment extends BasePreferenceFragment implements 
                 (preference, newValue) -> {
                     PicassoHelper.setShouldLoadImages((Boolean) newValue);
                     try {
+                        // Picasso's cache is the one that holds thumbnail *images*. The DeArrow
+                        // cache is deliberately left alone: it stores branding JSON -- titles and
+                        // frame timestamps, a few KB per bucket and no images at all -- so clearing
+                        // it here freed nothing and cost every de-clickbaited title in the app,
+                        // which then had to be re-fetched bucket by bucket. It has its own control
+                        // under Settings -> DeArrow.
                         PicassoHelper.clearCache(preference.getContext());
-                        DeArrowService.getInstance().clearDiskCache();
                         Toast.makeText(preference.getContext(),
                                 R.string.thumbnail_cache_wipe_complete_notice, Toast.LENGTH_SHORT)
                                 .show();
