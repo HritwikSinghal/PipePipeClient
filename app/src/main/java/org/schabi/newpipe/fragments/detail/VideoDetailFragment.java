@@ -215,6 +215,13 @@ public final class VideoDetailFragment
 
     @Nullable
     private StreamInfo currentInfo = null;
+    // URL of the StreamInfo currently painted into the view tree, used to skip a redundant
+    // re-render. Tracked as model state rather than read back from the title view: DeArrow rewrites
+    // that view's text, so comparing it against info.getName() can never match for a de-clickbaited
+    // video. Cleared wherever the render is torn down or superseded (showLoading, onDestroyView,
+    // handleError, cleanUp) so the guard cannot short-circuit a genuinely needed render.
+    @Nullable
+    private String renderedInfoUrl = null;
     // The list item the user tapped, if any. Used to render the detail header instantly while
     // the full StreamInfo is still being fetched. Consumed (and cleared) once the fetch resolves.
     @Nullable
@@ -471,6 +478,9 @@ public final class VideoDetailFragment
     @Override
     public void onDestroyView() {
         deArrowController.dispose();
+        // The view tree is going away while the fragment (and currentInfo) survives, so the next
+        // view must be rendered from scratch instead of being skipped as already drawn.
+        renderedInfoUrl = null;
         moveThumbnailToContainer(binding.detailThumbnailContainer);
         super.onDestroyView();
         binding = null;
@@ -668,8 +678,10 @@ public final class VideoDetailFragment
                 openChannel(currentInfo.getUploaderUrl(), currentInfo.getUploaderName());
             }
         } else if (id == R.id.detail_video_title_view) {
-            ShareUtils.copyToClipboard(requireContext(),
-                    binding.detailVideoTitleView.getText().toString());
+            // Copy the model title, not the view's text: DeArrow may have replaced the latter with
+            // a crowdsourced title carrying a leading star marker, and its replacement is meant to
+            // be purely visual (currentInfo is non-null, guarded at the top of this method).
+            ShareUtils.copyToClipboard(requireContext(), currentInfo.getName());
         } else if (id == R.id.detail_toggle_secondary_controls_view) {
             hideTitleAndSecondaryControls();
         } else if (id == R.id.detail_controls_playlist_append) {
@@ -1009,8 +1021,9 @@ public final class VideoDetailFragment
             if (activity == null) {
                 return;
             }
-            // Data can already be drawn, don't spend time twice
-            if (info.getName().equals(binding.detailVideoTitleView.getText().toString())) {
+            // Data can already be drawn, don't spend time twice. Compared against the identity of
+            // the last render rather than the title view's text, which DeArrow may have rewritten.
+            if (info.getUrl().equals(renderedInfoUrl)) {
                 return;
             }
             prepareAndHandleInfo(info, scrollToTop);
@@ -1737,6 +1750,7 @@ public final class VideoDetailFragment
         binding.tabLayout.setVisibility(View.GONE);
 
         previewInfoItem = null;
+        renderedInfoUrl = null;
     }
 
     private void setupBroadcastReceiver() {
@@ -1816,6 +1830,11 @@ public final class VideoDetailFragment
 
     @Override
     public void showLoading() {
+        // The header is about to be replaced, possibly by a different video. Unbind DeArrow first
+        // so a result still in flight for the previous video cannot paint its title or generated
+        // frame onto the new one, and forget what was drawn so the next render is not skipped.
+        deArrowController.dispose();
+        renderedInfoUrl = null;
 
         final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(activity);
         boolean shouldEllipsize = prefs.getBoolean(activity.getString(R.string.auto_ellipsize_key), false);
@@ -1979,6 +1998,7 @@ public final class VideoDetailFragment
         super.handleResult(info);
 
         currentInfo = info;
+        renderedInfoUrl = info.getUrl();
         setInitialData(info.getServiceId(), info.getOriginalUrl(), info.getName(), playQueue);
 
         updateTabs(info);
@@ -2660,6 +2680,7 @@ public final class VideoDetailFragment
         playerHolder.stopService();
         setInitialData(0, null, "", null);
         currentInfo = null;
+        renderedInfoUrl = null;
         updateOverlayData(null, null, null);
     }
 

@@ -752,9 +752,14 @@ class FeedFragment : BaseStateFragment<FeedState>() {
         loadedState.items.forEach { it.itemVersion = itemVersion }
 
         // Warm DeArrow branding/thumbnails for the page so they are ready before the rows bind.
+        // Convert lazily and only as far as the prefetcher looks: this runs on the main thread on
+        // every LoadedState emission, and a large subscription feed is easily 1000+ items.
         DeArrowPrefetcher.prefetch(
             requireContext(),
-            loadedState.items.map { it.streamWithState.stream.toStreamInfoItem() }
+            loadedState.items.asSequence()
+                .take(DEARROW_PREFETCH_ITEMS)
+                .map { it.streamWithState.stream.toStreamInfoItem() }
+                .toList()
         )
 
         // Store original items for filtering
@@ -1023,6 +1028,14 @@ class FeedFragment : BaseStateFragment<FeedState>() {
     companion object {
         const val KEY_GROUP_ID = "ARG_GROUP_ID"
         const val KEY_GROUP_NAME = "ARG_GROUP_NAME"
+
+        /**
+         * How many feed items to hand [DeArrowPrefetcher]. It truncates its input to its own cap
+         * anyway, so converting more than this only allocates throwaway items. Kept in sync with
+         * the prefetcher's internal limit by hand -- overshooting merely wastes a few conversions,
+         * undershooting merely leaves the tail of the page unwarmed.
+         */
+        private const val DEARROW_PREFETCH_ITEMS = 25
 
         @JvmStatic
         fun newInstance(groupId: Long = FeedGroupEntity.GROUP_ALL_ID, groupName: String? = null): FeedFragment {

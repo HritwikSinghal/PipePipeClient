@@ -159,6 +159,8 @@ public final class PlayQueueActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // Cancel any in-flight DeArrow fetch: it holds this Activity's views until it completes.
+        deArrowController.dispose();
         unbind();
     }
 

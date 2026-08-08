@@ -1,7 +1,6 @@
 package org.schabi.newpipe.player.playqueue;
 
 import android.content.Context;
-import android.text.TextUtils;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -21,9 +20,10 @@ public class PlayQueueItemBuilder {
     }
 
     public void buildStreamInfoItem(final PlayQueueItemHolder holder, final PlayQueueItem item) {
-        if (!TextUtils.isEmpty(item.getTitle())) {
-            holder.itemVideoTitleView.setText(item.getTitle());
-        }
+        // Always reset the baseline, even for an item whose metadata has not resolved yet: on a
+        // recycled holder the view still shows the previous row's text, which the DeArrow apply()
+        // below would otherwise snapshot as this item's original title.
+        holder.itemVideoTitleView.setText(item.getTitle() == null ? "" : item.getTitle());
         holder.deArrowController.apply(holder.itemVideoTitleView,
                 item.getServiceId(), item.getUrl());
         holder.itemAdditionalDetailsView.setText(Localization.concatenateStrings(item.getUploader(),
