@@ -156,7 +156,11 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         notifyItemRangeInserted(offsetStart, data.size());
 
         // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
-        DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
+        // The experimental Compose holders are deliberately DeArrow-blind for now, so under that UI
+        // a prefetch would only spend requests on results no row can ever render.
+        if (!shouldUseExperimentalNewUi(infoItemBuilder.getContext())) {
+            DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
+        }
 
         if (showFooter) {
             final int footerNow = sizeConsideringHeaderOffset();
@@ -174,8 +178,11 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         infoItemList.addAll(data);
         notifyDataSetChanged();
 
-        // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
-        DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
+        // Warm DeArrow branding/thumbnails for this page (skipped under the DeArrow-blind Compose
+        // UI, see addInfoItemList()).
+        if (!shouldUseExperimentalNewUi(infoItemBuilder.getContext())) {
+            DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
+        }
     }
 
     public void clearStreamItemList() {
