@@ -478,6 +478,7 @@
     <string name="dearrow_random_thumbnails_key" translatable="false">dearrow_random_thumbnails</string>
     <string name="dearrow_home_page_key" translatable="false">dearrow_home_page</string>
     <string name="dearrow_privacy_key" translatable="false">dearrow_privacy</string>
+    <string name="dearrow_clear_cache_key" translatable="false">dearrow_clear_cache</string>
 
     <!-- SponsorBlock -->
     <string name="sponsor_block_home_page_key" translatable="false">sponsor_block_home_page</string>

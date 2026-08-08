@@ -65,5 +65,11 @@
             android:key="@string/dearrow_random_thumbnails_key"
             android:summary="@string/dearrow_random_thumbnails_summary"
             android:title="@string/dearrow_random_thumbnails_title"/>
+
+        <Preference
+            app:iconSpaceReserved="false"
+            android:key="@string/dearrow_clear_cache_key"
+            android:summary="@string/dearrow_clear_cache_summary"
+            android:title="@string/dearrow_clear_cache_title"/>
     </PreferenceCategory>
 </PreferenceScreen>

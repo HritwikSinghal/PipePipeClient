@@ -694,6 +694,9 @@
 <string name="dearrow_replace_thumbnails_summary">Show DeArrow community thumbnails in place of the original.</string>
 <string name="dearrow_random_thumbnails_title">Use random video frames</string>
 <string name="dearrow_random_thumbnails_summary">For videos with no community thumbnail, show a random frame from the video. Turn off to replace only community-submitted thumbnails and keep the original everywhere else.</string>
+<string name="dearrow_clear_cache_title">Clear DeArrow cache</string>
+<string name="dearrow_clear_cache_summary">Forget the downloaded titles and thumbnail data. They are fetched again as you browse.</string>
+<string name="dearrow_clear_cache_complete_notice">DeArrow cache cleared</string>
 <string name="sponsor_block">SponsorBlock</string>
 <string name="sponsor_block_category_sponsor">Sponsor</string>
 <string name="sponsor_block_category_intro">Intermission/Intro Animation</string>
