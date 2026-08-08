@@ -32,6 +32,7 @@ import org.schabi.newpipe.player.datasource.LocalDomPoTokenProvider;
 import org.schabi.newpipe.settings.NewPipeSettings;
 import org.schabi.newpipe.util.*;
 import org.schabi.newpipe.util.dearrow.DeArrowService;
+import org.schabi.newpipe.util.dearrow.DeArrowSettingsWatcher;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -165,6 +166,9 @@ public class App extends MultiDexApplication {
         // Enable the DeArrow persistent (disk) branding cache so de-clickbait titles/thumbnails
         // survive app restarts and render instantly on a cold start.
         DeArrowService.getInstance().init(this);
+        // ... and let a DeArrow settings change reach the view sites that are already on screen,
+        // instead of leaving them showing replacements the user just turned off.
+        DeArrowSettingsWatcher.start(this);
 
         configureRxJavaErrorHandler();
     }
