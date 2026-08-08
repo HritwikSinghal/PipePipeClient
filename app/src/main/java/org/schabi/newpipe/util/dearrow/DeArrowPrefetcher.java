@@ -9,9 +9,7 @@ import androidx.annotation.VisibleForTesting;
 import org.schabi.newpipe.BuildConfig;
 import org.schabi.newpipe.extractor.InfoItem;
 import org.schabi.newpipe.extractor.ServiceList;
-import org.schabi.newpipe.extractor.exceptions.ParsingException;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
-import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeStreamLinkHandlerFactory;
 import org.schabi.newpipe.util.PicassoHelper;
 
 import java.util.ArrayList;
@@ -179,6 +177,10 @@ public final class DeArrowPrefetcher {
      * Extract the YouTube video ID for an item, or {@code null} if it is not a parseable YouTube
      * stream. Pure (no Android/network); package-visible for unit testing.
      *
+     * <p>The stream-item check is this method's own: {@link DeArrowVideoIds} works from a service
+     * ID and a URL, which a channel or playlist item also has, and warming branding for those would
+     * be wasted requests.</p>
+     *
      * @param item             the item to inspect
      * @param youtubeServiceId the YouTube service ID to match against
      * @return the video ID, or {@code null}
@@ -189,15 +191,6 @@ public final class DeArrowPrefetcher {
         if (!(item instanceof StreamInfoItem) || item.getServiceId() != youtubeServiceId) {
             return null;
         }
-        final String url = item.getUrl();
-        if (url == null) {
-            return null;
-        }
-        try {
-            final String id = YoutubeStreamLinkHandlerFactory.getInstance().getId(url);
-            return (id == null || id.isEmpty()) ? null : id;
-        } catch (final ParsingException | IllegalArgumentException e) {
-            return null;
-        }
+        return DeArrowVideoIds.of(item.getServiceId(), item.getUrl());
     }
 }

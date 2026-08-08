@@ -21,6 +21,7 @@ import org.schabi.newpipe.local.history.HistoryRecordManager;
 import org.schabi.newpipe.local.holder.*;
 import org.schabi.newpipe.util.*;
 import org.schabi.newpipe.util.dearrow.DeArrowPrefetcher;
+import org.schabi.newpipe.util.dearrow.DeArrowTitleMatcher;
 
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
@@ -496,20 +497,21 @@ public class LocalItemListAdapter extends RecyclerView.Adapter<RecyclerView.View
         if (text.isEmpty()) {
             filteredItems.addAll(localItems);
         } else {
+            final String query = text.toLowerCase();
+            // A row whose title DeArrow replaced does not show the title stored in the database, so
+            // searching only the stored one cannot find what is on screen. Built once per pass.
+            final DeArrowTitleMatcher deArrowMatcher = DeArrowTitleMatcher
+                    .forQuery(localItemBuilder.getContext(), text);
             for (LocalItem item : localItems) {
-                // cast item to PlaylistStreamEntry or StreamStatisticsEntry
-                if(item instanceof PlaylistStreamEntry) {
-                    if (((PlaylistStreamEntry)item).getStreamEntity().getTitle().toLowerCase().contains(text.toLowerCase())) {
-                        filteredItems.add(item);
-                    } else if (((PlaylistStreamEntry)item).getStreamEntity().getUploader().toLowerCase().contains(text.toLowerCase())) {
-                        filteredItems.add(item);
-                    }
-                } else if(item instanceof StreamStatisticsEntry) {
-                    if (((StreamStatisticsEntry) item).getStreamEntity().getTitle().toLowerCase().contains(text.toLowerCase())) {
-                        filteredItems.add(item);
-                    } else if (((StreamStatisticsEntry) item).getStreamEntity().getUploader().toLowerCase().contains(text.toLowerCase())) {
-                        filteredItems.add(item);
-                    }
+                final StreamEntity stream = streamEntityOf(item);
+                if (stream == null) {
+                    // Not a stream row (a playlist, a header): nothing to match against, as before.
+                    continue;
+                }
+                if (stream.getTitle().toLowerCase().contains(query)
+                        || stream.getUploader().toLowerCase().contains(query)
+                        || deArrowMatcher.matches(stream.getServiceId(), stream.getUrl())) {
+                    filteredItems.add(item);
                 }
             }
         }
