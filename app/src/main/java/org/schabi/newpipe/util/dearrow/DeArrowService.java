@@ -164,6 +164,35 @@ public final class DeArrowService {
     }
 
     /**
+     * The branding for a video if -- and only if -- its bucket is already resolved in memory.
+     *
+     * <p>Unlike {@link #getBranding(String)} this never reads the disk cache and never fetches, so
+     * it is safe to call synchronously on the main thread. It exists for the list filters, which
+     * run once per item on every keystroke and cannot wait on I/O; a video whose bucket is not warm
+     * simply does not match, which is the same outcome the caller already had.</p>
+     *
+     * <p>Expiry is deliberately ignored. A bucket past its TTL is still exactly what the rows
+     * currently on screen were rendered from -- they only pick up fresher branding when they rebind
+     * -- so honouring the TTL here would make the filter disagree with the visible titles, which is
+     * the very bug this exists to fix.</p>
+     *
+     * @param videoId the platform video ID
+     * @return the cached branding, or {@code null} if nothing is in the memory cache for it
+     */
+    @Nullable
+    public DeArrowBranding getCachedBranding(@Nullable final String videoId) {
+        if (videoId == null || videoId.isEmpty()) {
+            return null;
+        }
+        final String prefix = hashPrefix(videoId);
+        if (prefix == null) {
+            return null;
+        }
+        final BucketResult cached = cache.get(prefix);
+        return cached == null ? null : cached.entries.get(videoId);
+    }
+
+    /**
      * The bucket containing {@code prefix}, from memory, disk or the network in that order.
      *
      * <p>Everything runs inside a {@link Maybe#defer} so that merely <i>assembling</i> the chain
