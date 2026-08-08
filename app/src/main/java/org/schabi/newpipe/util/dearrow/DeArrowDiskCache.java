@@ -1,12 +1,17 @@
 package org.schabi.newpipe.util.dearrow;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Persistent, file-backed disk cache for DeArrow branding buckets.
@@ -20,12 +25,22 @@ import java.util.List;
  * {@code <cacheDir>/dearrow}. The file layout is: line 1 is the epoch-millis fetch time as a
  * decimal long, followed by a single {@code '\n'}, followed by the raw JSON body verbatim. Because
  * the JSON body may itself contain newlines, readers split only at the <i>first</i> newline. Writes
- * are atomic (temp file plus rename) and every operation is best-effort -- any I/O or parse failure
- * degrades gracefully to a cache miss rather than throwing.</p>
+ * are atomic (unique temp file plus rename) and every operation is best-effort -- any I/O or parse
+ * failure degrades gracefully to a cache miss rather than throwing.</p>
+ *
+ * <p>Deliberately built on {@code java.io} only. {@code java.nio.file} is API 26+ and is <i>not</i>
+ * covered by the standard {@code desugar_jdk_libs} artifact this app ships, so touching it would
+ * raise a {@link LinkageError} on an API 23-25 device -- an {@link Error}, which RxJava rethrows
+ * instead of routing to {@code onError}, silently wedging the calling chain. Nothing here needs an
+ * API level above 1.</p>
  */
 final class DeArrowDiskCache {
 
     private static final String TMP_SUFFIX = ".tmp";
+    private static final int COPY_BUFFER_BYTES = 8192;
+    // A live write renames its temp file within milliseconds, so any temp file older than this is
+    // an orphan left behind by a process that was killed mid-write.
+    private static final long TMP_MAX_AGE_MS = TimeUnit.MINUTES.toMillis(5);
 
     private final File dir;
 
@@ -58,9 +73,10 @@ final class DeArrowDiskCache {
         if (!f.isFile()) {
             return null;
         }
-        try {
-            final byte[] bytes = Files.readAllBytes(f.toPath());
-            final String content = new String(bytes, StandardCharsets.UTF_8);
+        // Throwable, not Exception: an Error escaping here would break this class's documented
+        // "degrades to a cache miss" contract and, worse, wedge the RxJava chain that called it.
+        try (InputStream in = new FileInputStream(f)) {
+            final String content = new String(readFully(in), StandardCharsets.UTF_8);
             final int newline = content.indexOf('\n');
             if (newline < 0) {
                 return null;
@@ -73,13 +89,18 @@ final class DeArrowDiskCache {
             }
             final String rawJson = content.substring(newline + 1);
             return new DiskEntry(rawJson, fetchedAtMs);
-        } catch (final IOException | RuntimeException e) {
+        } catch (final Throwable t) {
             return null;
         }
     }
 
     /**
      * Atomically persist a bucket for the given prefix. Best-effort: swallows any I/O error.
+     *
+     * <p>The temp file name is unique per call, not per prefix: two threads persisting the same
+     * prefix concurrently would otherwise truncate and interleave into one shared temp file, so the
+     * rename would publish a corrupt mixture even though the rename itself is atomic. Temp files
+     * orphaned by a kill mid-write are reclaimed by {@link #enforceBounds(int, long)}.</p>
      *
      * @param prefix      the 4-hex-char hash prefix (also the file name)
      * @param rawJson     the raw JSON body to store verbatim
@@ -89,18 +110,32 @@ final class DeArrowDiskCache {
         if (!isSafePrefix(prefix)) {
             return;
         }
-        final File tmp = new File(dir, prefix + TMP_SUFFIX);
+        final File tmp = new File(dir, prefix + "." + UUID.randomUUID() + TMP_SUFFIX);
         try {
             dir.mkdirs();
-            final String content = Long.toString(fetchedAtMs) + "\n" + rawJson;
-            Files.write(tmp.toPath(), content.getBytes(StandardCharsets.UTF_8));
+            final byte[] content = (Long.toString(fetchedAtMs) + "\n" + rawJson)
+                    .getBytes(StandardCharsets.UTF_8);
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(content);
+            }
             final File target = new File(dir, prefix);
             if (!tmp.renameTo(target)) {
                 tmp.delete();
             }
-        } catch (final IOException | RuntimeException e) {
+        } catch (final Throwable t) {
             tmp.delete();
         }
+    }
+
+    /** Read a stream to its end. Buckets are a few KB, so buffering the whole body is fine. */
+    private static byte[] readFully(final InputStream in) throws IOException {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final byte[] buffer = new byte[COPY_BUFFER_BYTES];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
     }
 
     /** Delete every entry file in the cache directory. Best-effort. */
@@ -116,7 +151,7 @@ final class DeArrowDiskCache {
             for (final File f : files) {
                 f.delete();
             }
-        } catch (final RuntimeException e) {
+        } catch (final Throwable t) {
             // best-effort: ignore
         }
     }
@@ -125,6 +160,10 @@ final class DeArrowDiskCache {
      * Trim the cache by age and count. Files older than {@code maxAgeMs} (by last-modified time,
      * which write sets to roughly the fetch time) are deleted first; then, if more than
      * {@code maxEntries} remain, the oldest are dropped until the count cap is met. Best-effort.
+     *
+     * <p>Orphaned temp files are swept too, on their own much shorter deadline: they are always
+     * garbage once a write can no longer be in progress, and they do not count towards
+     * {@code maxEntries} because they are not readable entries.</p>
      *
      * @param maxEntries the maximum number of entry files to retain
      * @param maxAgeMs   the maximum age in milliseconds before an entry is purged
@@ -140,16 +179,16 @@ final class DeArrowDiskCache {
             }
 
             final long now = System.currentTimeMillis();
-            final List<File> entries = new ArrayList<>();
-            for (final File f : listed) {
-                if (f.isFile() && !f.getName().endsWith(TMP_SUFFIX)) {
-                    entries.add(f);
-                }
-            }
-
             final List<File> remaining = new ArrayList<>();
-            for (final File f : entries) {
-                if (now - f.lastModified() > maxAgeMs) {
+            for (final File f : listed) {
+                if (!f.isFile()) {
+                    continue;
+                }
+                if (f.getName().endsWith(TMP_SUFFIX)) {
+                    if (now - f.lastModified() > TMP_MAX_AGE_MS) {
+                        f.delete();
+                    }
+                } else if (now - f.lastModified() > maxAgeMs) {
                     f.delete();
                 } else {
                     remaining.add(f);
@@ -163,7 +202,7 @@ final class DeArrowDiskCache {
                     remaining.get(i).delete();
                 }
             }
-        } catch (final RuntimeException e) {
+        } catch (final Throwable t) {
             // best-effort: ignore
         }
     }
