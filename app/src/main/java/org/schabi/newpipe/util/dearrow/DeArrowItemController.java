@@ -68,11 +68,22 @@ public final class DeArrowItemController {
     private Disposable disposable;
     private boolean showingOriginal;
 
+    // Whether a replacement was actually applied to the view, as opposed to merely being offered
+    // by the API. The badge may only claim "active" once something really changed: a replacement
+    // thumbnail URL is no evidence of a thumbnail, because the DeArrow generator answers 204 No
+    // Content for the vast majority of the random frames it has not produced yet (see
+    // swapInDeArrowThumbnail), which fails to decode and leaves the original in place.
+    private boolean titleReplaced;
+    private boolean thumbnailReplaced;
+
     private String originalTitle;
     private String originalThumbUrl;
     private String replacementTitle;
     private String replacementThumbUrl;
 
+    // All three are null before the first apply() and again after dispose(), which releases the
+    // view site rather than letting this controller outlive it holding the whole tree.
+    @Nullable
     private TextView titleView;
     @Nullable
     private ImageView thumbnailView;
@@ -136,14 +147,12 @@ public final class DeArrowItemController {
         replacementTitle = null;
         replacementThumbUrl = null;
         showingOriginal = false;
+        titleReplaced = false;
+        thumbnailReplaced = false;
+
 
         // Hide the badge until gated-in (also clears any recycled state).
-        if (badgeView != null) {
-            badgeView.setOnClickListener(null);
-            badgeView.setClickable(false);
-            badgeView.setVisibility(View.GONE);
-            clearBadgeTouchTarget();
-        }
+        hideBadge();
 
         final Context context = newTitleView.getContext();
         final boolean titlesOn = DeArrowSettings.isTitleReplacementEnabled(context);
@@ -167,11 +176,12 @@ public final class DeArrowItemController {
         }
 
         // Gated-in: show the badge faded (pending result).
-        if (badgeView != null) {
-            showFadedBadge();
-        }
+        showFadedBadge();
 
         final String requestedVideoId = videoId;
+        // The master toggle is re-read when the fetch resolves; keep the application context for
+        // that rather than capturing the view's, which would tie an Activity to the subscription.
+        final Context prefContext = context.getApplicationContext();
         final boolean autoFormat = DeArrowSettings.isAutoFormatTitlesEnabled(context);
         final boolean randomThumbFallback =
                 DeArrowSettings.isRandomThumbnailFallbackEnabled(context);
@@ -186,24 +196,39 @@ public final class DeArrowItemController {
                         }
                         return;
                     }
+                    // The gates above were read at bind time; the user may have switched DeArrow
+                    // off while this fetch was in flight, in which case the original must be left
+                    // exactly as it is. (A site that had already been replaced when the toggle
+                    // flipped is reverted separately, by onSettingsChanged.)
+                    if (!DeArrowSettings.isEnabled(prefContext)) {
+                        if (DEBUG) {
+                            Log.d(TAG, "resolve " + requestedVideoId + " DROPPED (disabled while "
+                                    + "in flight)");
+                        }
+                        hideBadge();
+                        return;
+                    }
                     replacementTitle = titlesOn
                             ? DeArrowTitleFormatter.selectTitle(branding, autoFormat) : null;
                     replacementThumbUrl = thumbsEffective
                             ? resolveThumbUrl(requestedVideoId, branding, randomThumbFallback)
                             : null;
-                    final boolean hasData =
-                            replacementTitle != null || replacementThumbUrl != null;
                     if (DEBUG) {
                         Log.d(TAG, "resolve " + requestedVideoId + " in "
                                 + (System.currentTimeMillis() - startMs) + "ms title="
                                 + (replacementTitle != null) + " thumb="
                                 + (replacementThumbUrl != null));
                     }
-                    if (hasData) {
+                    if (replacementTitle != null || replacementThumbUrl != null) {
                         render();
-                        if (badgeView != null) {
-                            showActiveBadge();
-                        }
+                    }
+                    // Only a replacement that actually landed may light the badge up. A title
+                    // renders synchronously inside render(), so titleReplaced is already set; a
+                    // thumbnail is asynchronous and most generator URLs never yield a frame, so a
+                    // thumbnail-only item stays faded until onBitmapLoaded says otherwise (a
+                    // cache hit resolves synchronously and is therefore already accounted for).
+                    if (titleReplaced || thumbnailReplaced) {
+                        showActiveBadge();
                     }
                     // else: badge stays faded + non-clickable.
                 }, error -> {
@@ -228,19 +253,27 @@ public final class DeArrowItemController {
         return DeArrowThumbnailUrl.build(videoId, time);
     }
 
-    /** Render the current toggle state for whichever replacements are effective. */
+    /**
+     * Render the current toggle state for whichever replacements are effective. Null-safe against
+     * a view site released by {@link #dispose}, so a late callback cannot touch a dead view.
+     */
     private void render() {
-        if (replacementTitle != null) {
+        final TextView title = titleView;
+        if (replacementTitle != null && title != null) {
             if (showingOriginal) {
-                titleView.setText(originalTitle);
+                title.setText(originalTitle);
             } else {
-                setMarkedTitle(titleView, replacementTitle);
+                setMarkedTitle(title, replacementTitle);
+                titleReplaced = true;
             }
         }
-        if (replacementThumbUrl != null && thumbnailView != null) {
+        final ImageView thumb = thumbnailView;
+        if (replacementThumbUrl != null && thumb != null) {
             if (showingOriginal) {
-                PicassoHelper.loadScaledDownThumbnail(
-                        thumbnailView.getContext(), originalThumbUrl).into(thumbnailView);
+                // Restoring: stop the DeArrow load from landing after the toggle, and keep the
+                // frame on screen until the original has decoded rather than blanking the view.
+                cancelPendingThumbnail();
+                PicassoHelper.loadScaledDownThumbnailKeepingCurrent(thumb, originalThumbUrl);
             } else {
                 swapInDeArrowThumbnail();
             }
@@ -263,6 +296,10 @@ public final class DeArrowItemController {
      */
     private void swapInDeArrowThumbnail() {
         final ImageView target = thumbnailView;
+        final String url = replacementThumbUrl;
+        if (target == null || url == null) {
+            return;
+        }
         final String idAtRender = boundVideoId;
         cancelPendingThumbnail();
         final Target thumbTarget = new Target() {
@@ -271,7 +308,10 @@ public final class DeArrowItemController {
                 pendingThumbnailTarget = null;
                 // Swap only if this site is still bound to the same item and still showing DeArrow.
                 if (!showingOriginal && idAtRender != null && idAtRender.equals(boundVideoId)) {
+                    thumbnailReplaced = true;
                     showDeArrowThumbnail(target, bitmap);
+                    // A frame really landed, so the badge has something to toggle back from.
+                    showActiveBadge();
                 }
             }
 
@@ -281,6 +321,14 @@ public final class DeArrowItemController {
                 pendingThumbnailTarget = null;
                 if (DEBUG) {
                     Log.d(TAG, "thumb " + idAtRender + " unavailable, keeping original: " + e);
+                }
+                // Nothing was replaced after all: drop the badge back to faded + non-clickable
+                // instead of letting it claim this item was de-clickbaited. Once any replacement
+                // has landed the badge stays active -- a failure on a later toggle back to DeArrow
+                // must not strand the user with no way to return.
+                if (!titleReplaced && !thumbnailReplaced
+                        && idAtRender != null && idAtRender.equals(boundVideoId)) {
+                    showFadedBadge();
                 }
             }
 
@@ -292,7 +340,7 @@ public final class DeArrowItemController {
         };
         // Hold a strong reference (Picasso keeps targets weakly) before kicking off the load.
         pendingThumbnailTarget = thumbTarget;
-        PicassoHelper.loadDeArrowThumbnailInto(replacementThumbUrl, thumbTarget);
+        PicassoHelper.loadDeArrowThumbnailInto(url, thumbTarget);
     }
 
     /**
@@ -316,6 +364,11 @@ public final class DeArrowItemController {
      * to the same bounds while it fades out.</p>
      */
     private static void showDeArrowThumbnail(final ImageView view, final Bitmap bitmap) {
+        // Claim the view first. The caller's original thumbnail load was started directly on this
+        // view and is deliberately never associated with the off-view DeArrow Target, so Picasso
+        // will not cancel it for us -- and when it completes it overwrites whatever is on the view
+        // without checking. See PicassoHelper#cancelInto.
+        PicassoHelper.cancelInto(view);
         final Drawable from = view.getDrawable();
         final Drawable to = new BitmapDrawable(view.getResources(), bitmap);
         if (from == null) {
@@ -327,6 +380,17 @@ public final class DeArrowItemController {
         transition.setCrossFadeEnabled(true);
         view.setImageDrawable(transition);
         transition.startTransition(THUMBNAIL_CROSSFADE_DURATION_MS);
+        // A TransitionDrawable never releases layer 0 once the fade ends (unlike PicassoDrawable),
+        // so leaving it in place would pin both bitmaps for the life of the binding -- expensive
+        // in a grid against Picasso's default memory cache -- and would nest if the user toggled
+        // again mid-fade. Once the fade is spent, swap in the frame on its own. The check keeps
+        // this honest: a rebind or a toggle since then owns the view now and must not be undone.
+        // Nothing here touches the controller, so a disposed one cannot be resurrected.
+        view.postDelayed(() -> {
+            if (view.getDrawable() == transition) {
+                view.setImageDrawable(to);
+            }
+        }, THUMBNAIL_CROSSFADE_DURATION_MS);
     }
 
     /**
@@ -372,23 +436,58 @@ public final class DeArrowItemController {
     }
 
     private void showFadedBadge() {
-        badgeView.setVisibility(View.VISIBLE);
-        badgeView.setAlpha(BADGE_FADED_ALPHA);
-        badgeView.setClickable(false);
-        badgeView.setOnClickListener(null);
-        badgeView.setImageResource(R.drawable.ic_dearrow_badge_active);
+        final ImageView badge = badgeView;
+        if (badge == null) {
+            return;
+        }
+        badge.setVisibility(View.VISIBLE);
+        badge.setAlpha(BADGE_FADED_ALPHA);
+        badge.setImageResource(R.drawable.ic_dearrow_badge_active);
         // Non-clickable: drop the enlarged hit area so taps here fall through to open the video.
-        clearBadgeTouchTarget();
+        releaseBadge();
     }
 
     private void showActiveBadge() {
-        badgeView.setVisibility(View.VISIBLE);
-        badgeView.setAlpha(1f);
-        badgeView.setClickable(true);
-        badgeView.setImageResource(showingOriginal
+        final ImageView badge = badgeView;
+        if (badge == null) {
+            return;
+        }
+        badge.setVisibility(View.VISIBLE);
+        badge.setAlpha(1f);
+        badge.setClickable(true);
+        badge.setImageResource(showingOriginal
                 ? R.drawable.ic_dearrow_badge_off : R.drawable.ic_dearrow_badge_active);
-        badgeView.setOnClickListener(v -> toggle());
+        badge.setOnClickListener(v -> toggle());
         expandBadgeTouchTarget();
+    }
+
+    /** Hide the badge and drop everything installed on it (see {@link #releaseBadge}). */
+    private void hideBadge() {
+        final ImageView badge = badgeView;
+        if (badge == null) {
+            return;
+        }
+        badge.setVisibility(View.GONE);
+        releaseBadge();
+    }
+
+    /**
+     * Drop everything this controller installed on the badge -- the click listener, clickability
+     * and the enlarged hit area -- without touching its visibility.
+     *
+     * <p>The listener holds this controller, which in turn holds the whole view site, so it must
+     * not outlive the binding. Clearing clickability also disarms the runnable posted by
+     * {@link #expandBadgeTouchTarget}, which bails on a badge that is no longer clickable and so
+     * cannot reinstate the hit area behind our back.</p>
+     */
+    private void releaseBadge() {
+        final ImageView badge = badgeView;
+        if (badge == null) {
+            return;
+        }
+        badge.setOnClickListener(null);
+        badge.setClickable(false);
+        clearBadgeTouchTarget();
     }
 
     /**
@@ -397,6 +496,9 @@ public final class DeArrowItemController {
      */
     private void expandBadgeTouchTarget() {
         final ImageView badge = badgeView;
+        if (badge == null) {
+            return;
+        }
         final ViewParent rawParent = badge.getParent();
         if (!(rawParent instanceof View)) {
             return;
@@ -418,7 +520,11 @@ public final class DeArrowItemController {
 
     /** Remove any enlarged badge hit area so the corner reverts to the underlying view's clicks. */
     private void clearBadgeTouchTarget() {
-        final ViewParent parent = badgeView.getParent();
+        final ImageView badge = badgeView;
+        if (badge == null) {
+            return;
+        }
+        final ViewParent parent = badge.getParent();
         if (parent instanceof View) {
             ((View) parent).setTouchDelegate(null);
         }
@@ -454,8 +560,15 @@ public final class DeArrowItemController {
     }
 
     /**
-     * Cancel any in-flight fetch and clear bound state. Call this when a view site is torn down
-     * (a dismissed dialog, a destroyed fragment view) so a late result cannot touch a dead view.
+     * Cancel any in-flight fetch and release the bound view site. Call this when a view site is
+     * torn down (a dismissed dialog, a destroyed fragment view, a recycled holder) so a late
+     * result cannot touch a dead view.
+     *
+     * <p>The view references are dropped too, because this controller routinely outlives the views
+     * it was given: it is a {@code final} field of a Fragment or a Player that survives its own
+     * view tree (bottom-sheet player, back stack, configuration change), and a retained title view
+     * reaches the whole destroyed hierarchy through {@code getParent()}. Callers always re-supply
+     * their views on the next {@link #apply}, so there is nothing to preserve here.</p>
      */
     public void dispose() {
         if (disposable != null) {
@@ -463,6 +576,17 @@ public final class DeArrowItemController {
             disposable = null;
         }
         cancelPendingThumbnail();
+        releaseBadge();
         boundVideoId = null;
+        titleView = null;
+        thumbnailView = null;
+        badgeView = null;
+        originalTitle = null;
+        originalThumbUrl = null;
+        replacementTitle = null;
+        replacementThumbUrl = null;
+        titleReplaced = false;
+        thumbnailReplaced = false;
+        showingOriginal = false;
     }
 }

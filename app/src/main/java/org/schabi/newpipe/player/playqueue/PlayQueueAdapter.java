@@ -217,6 +217,15 @@ public class PlayQueueAdapter extends RecyclerView.Adapter<RecyclerView.ViewHold
         }
     }
 
+    @Override
+    public void onViewRecycled(@NonNull final RecyclerView.ViewHolder holder) {
+        super.onViewRecycled(holder);
+        // Cancel any in-flight DeArrow fetch so a late result cannot write onto the recycled view.
+        if (holder instanceof PlayQueueItemHolder) {
+            ((PlayQueueItemHolder) holder).deArrowController.dispose();
+        }
+    }
+
     public static class HFHolder extends RecyclerView.ViewHolder {
         public View view;
 

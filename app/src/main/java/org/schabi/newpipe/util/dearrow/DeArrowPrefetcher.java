@@ -14,6 +14,7 @@ import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeStreamLinkHandlerFactory;
 import org.schabi.newpipe.util.PicassoHelper;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import io.reactivex.rxjava3.core.Observable;
@@ -39,9 +40,15 @@ import io.reactivex.rxjava3.schedulers.Schedulers;
  * faster -- it only fires a redundant cold generation for ~every row. Random frames therefore stay
  * lazy: {@link DeArrowItemController} still requests them at bind time when the setting is on.</p>
  *
- * <p>The warm holds no view or Activity references (only the DeArrow/Picasso singletons and the
- * video IDs), so it is safe to leave running if the surface is torn down. Concurrency is capped to
- * stay polite to the DeArrow API.</p>
+ * <p>The caller's list is snapshotted synchronously before any work is scheduled. Callers hand us
+ * live, mutable fields -- {@code RepliesHandler} passes its {@code cachedReplies} and clears it on
+ * the main thread, and {@code InfoListAdapter} forwards extractor page lists directly -- so
+ * iterating the caller's list on an io thread would race and throw
+ * {@link java.util.ConcurrentModificationException}, silently aborting the whole page warm.</p>
+ *
+ * <p>The warm therefore retains only its own bounded snapshot plus the DeArrow/Picasso singletons;
+ * it holds no view or Activity references, so it is safe to leave running if the surface is torn
+ * down. Concurrency is capped to stay polite to the DeArrow API.</p>
  */
 public final class DeArrowPrefetcher {
     /** Max simultaneous bucket fetches, to avoid a burst against the DeArrow API on page load. */
@@ -87,18 +94,20 @@ public final class DeArrowPrefetcher {
 
         final int youtubeServiceId = ServiceList.YouTube.getServiceId();
         final long startMs = System.currentTimeMillis();
-        final int warmCount = Math.min(items.size(), MAX_PREFETCH_ITEMS);
+        final int pageSize = items.size();
+        // Snapshot on the calling thread: the list is caller-owned and may be mutated or cleared
+        // while the warm runs. See the class javadoc.
+        final List<InfoItem> warmItems = snapshot(items);
         if (DEBUG) {
-            Log.d(TAG, "prefetch page: " + items.size() + " items (warming first " + warmCount
+            Log.d(TAG, "prefetch page: " + pageSize + " items (warming first " + warmItems.size()
                     + ", titles=" + titlesOn + " thumbs=" + thumbsOn
                     + ", concurrency=" + MAX_CONCURRENCY + ")");
         }
-        // Parse IDs and warm buckets off the main thread; warm only a viewport-sized window
-        // (take) and cap concurrent fetches (flatMap is the only operator with a maxConcurrency
-        // overload). getBranding's bucket cache + in-flight dedup make this idempotent and cheap
-        // on a cache hit, so the smaller pages that follow a scroll mostly hit the warm cache.
-        Observable.fromIterable(items)
-                .take(MAX_PREFETCH_ITEMS)
+        // Parse IDs and warm buckets off the main thread, capping concurrent fetches (flatMap is
+        // the only operator with a maxConcurrency overload). getBranding's bucket cache +
+        // in-flight dedup make this idempotent and cheap on a cache hit, so the smaller pages that
+        // follow a scroll mostly hit the warm cache.
+        Observable.fromIterable(warmItems)
                 .subscribeOn(Schedulers.io())
                 .flatMap(item -> {
                     final String videoId = youtubeVideoId(item, youtubeServiceId);
@@ -114,12 +123,46 @@ public final class DeArrowPrefetcher {
                             .onErrorComplete()
                             .toObservable();
                 }, false, MAX_CONCURRENCY)
-                .subscribe(branding -> { }, error -> { }, () -> {
+                .subscribe(branding -> { }, error -> {
+                    // An aborted warm is otherwise indistinguishable from a completed one: the
+                    // rows still resolve lazily at bind time, just without the front-loading.
+                    if (DEBUG) {
+                        Log.w(TAG, "prefetch page ABORTED after "
+                                + (System.currentTimeMillis() - startMs) + "ms: " + error);
+                    }
+                }, () -> {
                     if (DEBUG) {
                         Log.d(TAG, "prefetch page done in "
                                 + (System.currentTimeMillis() - startMs) + "ms");
                     }
                 });
+    }
+
+    /**
+     * Copy at most {@link #MAX_PREFETCH_ITEMS} items out of a caller-owned list, on the calling
+     * thread.
+     *
+     * <p>This is both the viewport-window cap and the defence against the caller mutating its list
+     * underneath us -- see the class javadoc. Iteration is index-based rather than via an iterator
+     * so that a concurrent mutation can at worst truncate the snapshot instead of throwing; the
+     * size is re-read each step because the list may shrink mid-copy.</p>
+     *
+     * @param items the caller's list
+     * @return a private, bounded snapshot
+     */
+    @VisibleForTesting
+    static List<InfoItem> snapshot(final List<? extends InfoItem> items) {
+        final List<InfoItem> copy = new ArrayList<>(
+                Math.min(items.size(), MAX_PREFETCH_ITEMS));
+        for (int i = 0; i < MAX_PREFETCH_ITEMS && i < items.size(); i++) {
+            try {
+                copy.add(items.get(i));
+            } catch (final IndexOutOfBoundsException e) {
+                // The list shrank between the size check and the get -- stop with what we have.
+                break;
+            }
+        }
+        return copy;
     }
 
     private static void warmThumbnail(final String videoId, final DeArrowBranding branding) {

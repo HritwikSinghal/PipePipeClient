@@ -8,6 +8,8 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 
 import android.util.Log;
+import android.widget.ImageView;
+
 import com.squareup.picasso.Cache;
 import com.squareup.picasso.LruCache;
 import com.squareup.picasso.OkHttp3Downloader;
@@ -178,6 +180,34 @@ public final class PicassoHelper {
     }
 
     /**
+     * Load a scaled-down thumbnail into a view that already shows an image, keeping that image on
+     * screen for the whole load instead of blanking the view.
+     *
+     * <p>{@link #loadImageDefault} deliberately sets no placeholder for a real URL, so on a memory
+     * cache miss Picasso calls {@code setPlaceholder(target, null)} -- i.e.
+     * {@code setImageDrawable(null)} -- and the view stays empty until the network load returns.
+     * That is the right default when there is nothing worth preserving, but it makes the DeArrow
+     * badge's "restore the original" toggle flash a blank thumbnail. Handing Picasso the view's
+     * current drawable as the placeholder keeps the outgoing image visible instead.</p>
+     *
+     * <p>The placeholder is only supplied when {@link #loadImageDefault} leaves that slot free: for
+     * a blank URL (or with image loading off) it installs the dummy-thumbnail resource itself, and
+     * Picasso rejects a second placeholder with an {@link IllegalStateException}.</p>
+     *
+     * @param view the target view, whose current drawable is preserved during the load
+     * @param url  the thumbnail URL
+     */
+    public static void loadScaledDownThumbnailKeepingCurrent(final ImageView view,
+                                                             final String url) {
+        final RequestCreator request = loadScaledDownThumbnail(view.getContext(), url);
+        final Drawable current = view.getDrawable();
+        if (current != null && shouldLoadImages && !isBlank(url)) {
+            request.placeholder(current);
+        }
+        request.into(view);
+    }
+
+    /**
      * Load a DeArrow replacement thumbnail into an off-view {@link Target} that decodes the frame
      * before it is shown, so the visible {@link android.widget.ImageView} is never disturbed unless
      * a real frame actually arrives.
@@ -192,6 +222,10 @@ public final class PicassoHelper {
      * and routes to {@code onBitmapFailed}, letting the caller keep the original. The
      * {@code transform} matches {@link #prefetchDeArrowThumbnail} so a prefetched frame resolves
      * from cache.</p>
+     *
+     * <p>The flip side of (a) is that Picasso does not know the two requests are related, so a
+     * caller that goes on to draw the frame on the view must cancel the original itself -- see
+     * {@link #cancelInto}.</p>
      *
      * @param url    the DeArrow thumbnail-generator URL
      * @param target the off-view target that receives the decoded frame; the caller must hold a
@@ -210,6 +244,27 @@ public final class PicassoHelper {
      */
     public static void cancelDeArrowThumbnail(final Target target) {
         picassoInstance.cancelRequest(target);
+    }
+
+    /**
+     * Cancel any in-flight Picasso request that targets an {@link ImageView}, so a load started
+     * elsewhere cannot overwrite a drawable the caller is about to set on that view.
+     *
+     * <p>Needed by the DeArrow thumbnail swap. {@link #loadDeArrowThumbnailInto} loads through an
+     * off-view {@link Target} precisely so the view's own load is left alone, which means Picasso
+     * never associates the two requests and never auto-cancels the original. That original
+     * completes by calling {@code setImageDrawable} unconditionally -- it does not check whether
+     * the drawable changed underneath it -- so a DeArrow frame applied first (prefetched frames
+     * come from the memory cache and are delivered synchronously) would be silently painted over
+     * a few hundred milliseconds later, while the badge still reads "active". Cancelling costs
+     * nothing here: the replacement bitmap is already decoded, and the next bind re-issues the
+     * original load.</p>
+     *
+     * @param view the view whose pending request should be dropped; a view with no request in
+     *             flight is a no-op
+     */
+    public static void cancelInto(final ImageView view) {
+        picassoInstance.cancelRequest(view);
     }
 
     /**
