@@ -25,9 +25,6 @@ import com.squareup.picasso.Target;
 
 import org.schabi.newpipe.BuildConfig;
 import org.schabi.newpipe.R;
-import org.schabi.newpipe.extractor.ServiceList;
-import org.schabi.newpipe.extractor.exceptions.ParsingException;
-import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeStreamLinkHandlerFactory;
 import org.schabi.newpipe.util.PicassoHelper;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
@@ -160,15 +157,8 @@ public final class DeArrowItemController {
                 && PicassoHelper.getShouldLoadImages()
                 && DeArrowSettings.isThumbnailReplacementEnabled(context);
 
-        String videoId = null;
-        if (url != null && (titlesOn || thumbsEffective)
-                && serviceId == ServiceList.YouTube.getServiceId()) {
-            try {
-                videoId = YoutubeStreamLinkHandlerFactory.getInstance().getId(url);
-            } catch (final ParsingException | IllegalArgumentException e) {
-                videoId = null;
-            }
-        }
+        final String videoId = (titlesOn || thumbsEffective)
+                ? DeArrowVideoIds.of(serviceId, url) : null;
 
         boundVideoId = videoId;
         if (videoId == null) {
