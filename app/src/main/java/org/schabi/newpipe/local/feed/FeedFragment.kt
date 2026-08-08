@@ -88,6 +88,7 @@ import org.schabi.newpipe.util.ThemeHelper.getItemViewMode
 import org.schabi.newpipe.util.ThemeHelper.resolveDrawable
 import org.schabi.newpipe.util.ThemeHelper.shouldUseGridLayout
 import org.schabi.newpipe.util.dearrow.DeArrowPrefetcher
+import org.schabi.newpipe.util.dearrow.DeArrowTitleMatcher
 import java.time.OffsetDateTime
 import java.util.function.Consumer
 
@@ -563,10 +564,16 @@ class FeedFragment : BaseStateFragment<FeedState>() {
         if (text.isEmpty()) {
             filteredItems.addAll(originalItems)
         } else {
+            val query = text.lowercase()
+            // A row whose title DeArrow replaced does not show the title stored in the database, so
+            // searching only the stored one cannot find what is on screen. Built once per pass.
+            val deArrowMatcher = DeArrowTitleMatcher.forQuery(requireContext(), text)
             for (item in originalItems) {
                 val stream = item.streamWithState.stream
-                if (stream.title.lowercase().contains(text.lowercase()) ||
-                    stream.uploader.lowercase().contains(text.lowercase()) == true) {
+                if (stream.title.lowercase().contains(query) ||
+                    stream.uploader.lowercase().contains(query) ||
+                    deArrowMatcher.matches(stream.serviceId, stream.url)
+                ) {
                     filteredItems.add(item)
                 }
             }
