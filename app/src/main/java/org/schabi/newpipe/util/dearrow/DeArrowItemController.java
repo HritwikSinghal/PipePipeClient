@@ -47,6 +47,10 @@ import io.reactivex.rxjava3.disposables.Disposable;
  * thumbnail swap and an always-present corner badge: faded + non-clickable while no replacement
  * exists (taps fall through to open the video), active + clickable once data resolves. Tapping the
  * badge toggles title and thumbnail together between the DeArrow and original versions.</p>
+ *
+ * <p>The preferences are read at bind time, so a live controller registers itself with
+ * {@link DeArrowSettingsWatcher} and re-runs its bind when one of them changes -- otherwise a site
+ * already on screen would keep showing a replacement the user had just switched off.</p>
  */
 public final class DeArrowItemController {
     private static final float BADGE_FADED_ALPHA = 0.45f;
@@ -62,6 +66,10 @@ public final class DeArrowItemController {
     private static final boolean DEBUG = BuildConfig.DEBUG;
 
     private String boundVideoId;
+    // The last apply() arguments that are not otherwise retained, so onSettingsChanged() can re-run
+    // the bind against the new preferences without the caller being involved.
+    private int boundServiceId;
+    private String boundUrl;
     private Disposable disposable;
     private boolean showingOriginal;
 
@@ -139,6 +147,8 @@ public final class DeArrowItemController {
         titleView = newTitleView;
         thumbnailView = newThumbnailView;
         badgeView = newBadgeView;
+        boundServiceId = serviceId;
+        boundUrl = url;
         originalTitle = newOriginalTitle;
         originalThumbUrl = newOriginalThumbUrl;
         replacementTitle = null;
@@ -147,6 +157,10 @@ public final class DeArrowItemController {
         titleReplaced = false;
         thumbnailReplaced = false;
 
+        // Registered whatever the outcome below, including for a site DeArrow cannot touch at all:
+        // the preferences may change into a state where it can, and re-running a bind that resolves
+        // to "nothing to do" costs nothing.
+        DeArrowSettingsWatcher.register(this);
 
         // Hide the badge until gated-in (also clears any recycled state).
         hideBadge();
@@ -419,6 +433,48 @@ public final class DeArrowItemController {
         }
     }
 
+    /**
+     * Re-evaluate this site against the current DeArrow preferences, called by
+     * {@link DeArrowSettingsWatcher} when the user changes one.
+     *
+     * <p>The originals are restored first because {@link #applyInternal} cannot do it: it is
+     * normally called straight after the caller has set the original title and thumbnail itself, so
+     * it only ever writes replacements over them. Reaching it with a replacement still on the view
+     * -- which is the whole point here -- would leave that replacement in place whenever the new
+     * preferences say there should be none.</p>
+     */
+    void onSettingsChanged() {
+        final TextView title = titleView;
+        if (title == null) {
+            // Disposed, or never applied: there is no view site to re-evaluate.
+            return;
+        }
+        restoreOriginals();
+        applyInternal(title, thumbnailView, badgeView, boundServiceId, boundUrl,
+                originalTitle, originalThumbUrl);
+    }
+
+    /**
+     * Put the original title and thumbnail back on the view, undoing whatever this controller
+     * replaced. A site that is already showing the originals -- never replaced, or toggled back by
+     * the badge -- is left alone rather than reloading an image it is already displaying.
+     */
+    private void restoreOriginals() {
+        if (showingOriginal) {
+            return;
+        }
+        final TextView title = titleView;
+        if (title != null && titleReplaced && originalTitle != null) {
+            title.setText(originalTitle);
+        }
+        final ImageView thumb = thumbnailView;
+        if (thumb != null && thumbnailReplaced) {
+            // Stop a DeArrow frame that is still in flight from landing after the revert.
+            cancelPendingThumbnail();
+            PicassoHelper.loadScaledDownThumbnailKeepingCurrent(thumb, originalThumbUrl);
+        }
+    }
+
     private void toggle() {
         showingOriginal = !showingOriginal;
         render();
@@ -567,7 +623,9 @@ public final class DeArrowItemController {
         }
         cancelPendingThumbnail();
         releaseBadge();
+        DeArrowSettingsWatcher.unregister(this);
         boundVideoId = null;
+        boundUrl = null;
         titleView = null;
         thumbnailView = null;
         badgeView = null;
