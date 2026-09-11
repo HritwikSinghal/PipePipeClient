@@ -243,6 +243,20 @@ public final class PicassoHelper {
      * @param target the target previously passed to {@link #loadDeArrowThumbnailInto}
      */
     public static void cancelDeArrowThumbnail(final Target target) {
+        cancelTarget(target);
+    }
+
+    /**
+     * Cancel any in-flight Picasso request delivering to an off-view {@link Target}.
+     *
+     * <p>The Compose item UI loads every image through a {@link Target} rather than an
+     * {@link ImageView}, so this is what a recycled or scrolled-away row uses to stop work it no
+     * longer needs -- Picasso only auto-cancels requests it can associate with a view.</p>
+     *
+     * @param target the target whose pending request should be dropped; a target with no request
+     *               in flight is a no-op
+     */
+    public static void cancelTarget(final Target target) {
         picassoInstance.cancelRequest(target);
     }
 

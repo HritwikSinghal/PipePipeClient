@@ -3,6 +3,8 @@ package org.schabi.newpipe.info_list
 import android.content.Context
 import android.graphics.Bitmap
 import android.view.MotionEvent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -158,7 +160,11 @@ private fun rememberPicassoBitmap(
     key: Any?,
     request: () -> RequestCreator
 ): Bitmap? {
-    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    // Keyed, not bare. ComposeView.setContent does NOT rebuild the composition, so on a recycled
+    // holder an unkeyed remember still holds the PREVIOUS item's bitmap when the new item first
+    // composes, and DisposableEffect only clears it a frame later, in the effect phase. Keying
+    // makes the reset part of composition itself.
+    var bitmap by remember(key) { mutableStateOf<Bitmap?>(null) }
 
     DisposableEffect(key) {
         bitmap = null
@@ -175,8 +181,13 @@ private fun rememberPicassoBitmap(
             }
         }
         request().into(target)
-        onDispose {
-        }
+        // Two jobs. Capturing `target` here is what keeps it alive at all: Picasso holds targets
+        // weakly, so without a strong reference a GC mid-flight silently drops the image. The
+        // cancel then drops the superseded request when the effect restarts. Note this fires on
+        // REBIND (when `key` changes), not on scroll-away: ComposeInfoItemHolder uses
+        // DisposeOnViewTreeLifecycleDestroyed, so a recycled holder's composition stays alive and
+        // keeps its target until it is bound to something else. That is bounded by the view pool.
+        onDispose { PicassoHelper.cancelTarget(target) }
     }
 
     return bitmap
@@ -212,8 +223,20 @@ data class ComposeItemState(
     val showPaidBadge: Boolean,
     val progress: Float?,
     val playlistCount: String?,
-    val isChannel: Boolean
+    val isChannel: Boolean,
+    /**
+     * Service and URL of the underlying video, for DeArrow. Left at the defaults for anything that
+     * is not a single video (a channel or playlist row), which switches DeArrow off for that item.
+     */
+    val serviceId: Int = NO_SERVICE_ID,
+    val url: String? = null
 )
+
+/** Service ID for an item DeArrow can never apply to; see [ComposeItemState.serviceId]. */
+private const val NO_SERVICE_ID = -1
+
+/** Matches the View sites' DeArrow thumbnail swap, so the change reads the same in both UIs. */
+private const val THUMBNAIL_CROSSFADE_MS = 200
 
 fun buildInfoItemState(
     context: Context,
@@ -265,7 +288,9 @@ fun buildInfoItemState(
                     null
                 },
                 playlistCount = null,
-                isChannel = false
+                isChannel = false,
+                serviceId = item.serviceId,
+                url = item.url
             )
         }
         InfoType.PLAYLIST -> {
@@ -319,6 +344,8 @@ fun buildLocalItemState(
     dateTimeFormatter: DateTimeFormatter?
 ): ComposeItemState? {
     return when (item.localItemType) {
+        // Both stream rows carry serviceId + url so DeArrow reaches local playlists and history,
+        // exactly as it does for their View-based holders.
         LocalItem.LocalItemType.PLAYLIST_STREAM_ITEM -> {
             item as PlaylistStreamEntry
             ComposeItemState(
@@ -342,7 +369,9 @@ fun buildLocalItemState(
                     null
                 },
                 playlistCount = null,
-                isChannel = false
+                isChannel = false,
+                serviceId = item.streamEntity.serviceId,
+                url = item.streamEntity.url
             )
         }
         LocalItem.LocalItemType.STATISTIC_STREAM_ITEM -> {
@@ -368,7 +397,9 @@ fun buildLocalItemState(
                     null
                 },
                 playlistCount = null,
-                isChannel = false
+                isChannel = false,
+                serviceId = item.streamEntity.serviceId,
+                url = item.streamEntity.url
             )
         }
         LocalItem.LocalItemType.PLAYLIST_LOCAL_ITEM -> {
@@ -431,25 +462,32 @@ fun CommonItem(
                 onLongClick = onLongClick
             )
         }
-    } else if (isGridLayout || isCardLayout) {
-        StreamOrPlaylistGridItem(
-            state = state,
-            modifier = modifier,
-            onClick = onClick,
-            onLongClick = onLongClick,
-            showDragHandle = showDragHandle,
-            onDragStart = onDragStart,
-            isCardLayout = isCardLayout
-        )
     } else {
-        StreamOrPlaylistListItem(
-            state = state,
-            modifier = modifier,
-            onClick = onClick,
-            onLongClick = onLongClick,
-            showDragHandle = showDragHandle,
-            onDragStart = onDragStart
-        )
+        // Resolved once per item and shared by the thumbnail, the title and the badge. A playlist
+        // row carries no serviceId/url, so this is inert for it.
+        val dearrow = rememberDeArrowItemState(state.serviceId, state.url)
+        if (isGridLayout || isCardLayout) {
+            StreamOrPlaylistGridItem(
+                state = state,
+                dearrow = dearrow,
+                modifier = modifier,
+                onClick = onClick,
+                onLongClick = onLongClick,
+                showDragHandle = showDragHandle,
+                onDragStart = onDragStart,
+                isCardLayout = isCardLayout
+            )
+        } else {
+            StreamOrPlaylistListItem(
+                state = state,
+                dearrow = dearrow,
+                modifier = modifier,
+                onClick = onClick,
+                onLongClick = onLongClick,
+                showDragHandle = showDragHandle,
+                onDragStart = onDragStart
+            )
+        }
     }
 }
 
@@ -595,6 +633,7 @@ private fun OverlayBadge(
 @Composable
 private fun ThumbnailBox(
     state: ComposeItemState,
+    dearrow: DeArrowItemState? = null,
     width: Dp? = null,
     height: Dp? = null,
     useAspectRatio: Boolean,
@@ -609,6 +648,12 @@ private fun ThumbnailBox(
             PicassoHelper.loadScaledDownThumbnail(context, state.imageUrl)
         }
     }
+    // Decoded off-view, so a frame the generator has not produced yet (204 No Content) leaves the
+    // original on screen instead of blanking the row.
+    val deArrowBitmap = rememberDeArrowThumbnail(dearrow?.effectiveThumbnailUrl)
+    if (dearrow != null) {
+        TrackDeArrowThumbnail(dearrow, deArrowBitmap)
+    }
 
     Box(
         modifier = modifier
@@ -617,11 +662,24 @@ private fun ThumbnailBox(
             .then(if (useAspectRatio) Modifier.aspectRatio(16f / 9f) else Modifier)
             .clip(RoundedCornerShape(rounded))
     ) {
-        RemoteImage(
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-            bitmap = bitmap
-        )
+        Crossfade(
+            targetState = deArrowBitmap ?: bitmap,
+            animationSpec = tween(THUMBNAIL_CROSSFADE_MS),
+            label = "thumbnail"
+        ) { shown ->
+            RemoteImage(
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                bitmap = shown
+            )
+        }
+
+        if (dearrow != null && dearrow.gatedIn) {
+            DeArrowBadge(
+                state = dearrow,
+                modifier = Modifier.align(Alignment.TopStart)
+            )
+        }
 
         if (state.showLiveBadge) {
             OverlayBadge(
@@ -715,6 +773,7 @@ private fun DragHandle(
 @Composable
 private fun StreamOrPlaylistListItem(
     state: ComposeItemState,
+    dearrow: DeArrowItemState?,
     modifier: Modifier,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
@@ -730,6 +789,7 @@ private fun StreamOrPlaylistListItem(
     ) {
         ThumbnailBox(
             state = state,
+            dearrow = dearrow,
             width = 120.dp,
             height = 70.dp,
             useAspectRatio = false,
@@ -745,12 +805,12 @@ private fun StreamOrPlaylistListItem(
                 .fillMaxHeight(),
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            Text(
-                text = state.title,
+            DeArrowAwareTitle(
+                title = state.title,
+                dearrow = dearrow,
                 style = TextStyle(fontSize = 13.5.sp),
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                maxLines = 2
             )
             state.subtitle?.let {
                 Text(
@@ -789,6 +849,7 @@ private fun StreamOrPlaylistListItem(
 @Composable
 private fun StreamOrPlaylistGridItem(
     state: ComposeItemState,
+    dearrow: DeArrowItemState?,
     modifier: Modifier,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
@@ -804,6 +865,7 @@ private fun StreamOrPlaylistGridItem(
     ) {
         ThumbnailBox(
             state = state,
+            dearrow = dearrow,
             useAspectRatio = true,
             rounded = 8.dp,
             modifier = Modifier.fillMaxWidth()
@@ -811,12 +873,12 @@ private fun StreamOrPlaylistGridItem(
 
         Spacer(modifier = Modifier.height(8.dp))
         Box(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = state.title,
+            DeArrowAwareTitle(
+                title = state.title,
+                dearrow = dearrow,
                 style = TextStyle(fontSize = 13.5.sp, fontWeight = FontWeight.Medium),
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(end = if (showDragHandle) 28.dp else 0.dp)

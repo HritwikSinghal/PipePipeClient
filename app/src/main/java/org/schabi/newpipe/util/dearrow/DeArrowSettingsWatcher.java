@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Applies a DeArrow preference change to the view sites that are already on screen.
@@ -45,6 +46,9 @@ public final class DeArrowSettingsWatcher {
      */
     private static final Set<DeArrowItemController> LIVE_SITES =
             Collections.newSetFromMap(new WeakHashMap<>());
+
+    /** Process-lifetime observers of a preference change; see {@link #addObserver}. */
+    private static final List<Runnable> OBSERVERS = new CopyOnWriteArrayList<>();
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -123,6 +127,21 @@ public final class DeArrowSettingsWatcher {
     }
 
     /**
+     * Register a callback run on the main thread after every watched preference change.
+     *
+     * <p>For view layers that have no {@link DeArrowItemController} to re-run. The Compose item UI
+     * is the only caller: it keeps a recomposition counter that one of these bumps, which re-binds
+     * every DeArrow-aware item on screen. Observers are held <b>strongly and forever</b>, so this
+     * is only safe for process-lifetime singletons -- anything holding a view or an Activity must
+     * use {@link #register} instead, which holds controllers weakly.</p>
+     *
+     * @param observer the callback; registering the same instance twice runs it twice
+     */
+    public static void addObserver(final Runnable observer) {
+        OBSERVERS.add(observer);
+    }
+
+    /**
      * Re-evaluate every live site against the new preferences.
      *
      * <p>Iterates a snapshot: {@link DeArrowItemController#onSettingsChanged} re-runs the bind,
@@ -135,6 +154,9 @@ public final class DeArrowSettingsWatcher {
         }
         for (final DeArrowItemController controller : snapshot) {
             controller.onSettingsChanged();
+        }
+        for (final Runnable observer : OBSERVERS) {
+            observer.run();
         }
     }
 }

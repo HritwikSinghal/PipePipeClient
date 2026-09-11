@@ -39,7 +39,9 @@ import org.schabi.newpipe.util.OnClickGesture;
 import org.schabi.newpipe.util.dearrow.DeArrowPrefetcher;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import static org.schabi.newpipe.util.ThemeHelper.isGrid;
@@ -87,6 +89,12 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private static final int MINI_COMMENT_HOLDER_TYPE = 0x400;
     private static final int COMMENT_HOLDER_TYPE = 0x401;
     private static final int STAFF_TYPE = 0x816;
+
+    /** The item types the Compose holder can actually render; see {@link #getItemViewType(int)}. */
+    private static final Set<InfoItem.InfoType> COMPOSE_SUPPORTED_TYPES = EnumSet.of(
+            InfoItem.InfoType.STREAM,
+            InfoItem.InfoType.PLAYLIST,
+            InfoItem.InfoType.CHANNEL);
 
     private final LayoutInflater layoutInflater;
     private final InfoItemBuilder infoItemBuilder;
@@ -156,11 +164,9 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         notifyItemRangeInserted(offsetStart, data.size());
 
         // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
-        // The experimental Compose holders are deliberately DeArrow-blind for now, so under that UI
-        // a prefetch would only spend requests on results no row can ever render.
-        if (!shouldUseExperimentalNewUi(infoItemBuilder.getContext())) {
-            DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
-        }
+        // Both UIs render DeArrow now (the Compose holders via DeArrowComposeItem), so this is no
+        // longer gated on the experimental-UI flag.
+        DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
 
         if (showFooter) {
             final int footerNow = sizeConsideringHeaderOffset();
@@ -178,11 +184,8 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         infoItemList.addAll(data);
         notifyDataSetChanged();
 
-        // Warm DeArrow branding/thumbnails for this page (skipped under the DeArrow-blind Compose
-        // UI, see addInfoItemList()).
-        if (!shouldUseExperimentalNewUi(infoItemBuilder.getContext())) {
-            DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
-        }
+        // Warm DeArrow branding/thumbnails for this page (see addInfoItemList()).
+        DeArrowPrefetcher.prefetch(infoItemBuilder.getContext(), data);
     }
 
     public void clearStreamItemList() {
@@ -268,8 +271,12 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             return FOOTER_TYPE;
         }
         final InfoItem item = infoItemList.get(position);
+        // An allowlist, not a COMMENT denylist. buildInfoItemState() only builds STREAM, PLAYLIST
+        // and CHANNEL rows and returns null for everything else, and on null
+        // ComposeInfoItemHolder returns *before* calling setContent -- so a recycled ComposeView
+        // went on showing the previous item. STAFF and BULLET_COMMENT items took exactly that path.
         if (shouldUseExperimentalNewUi(layoutInflater.getContext())
-                && item.getInfoType() != InfoItem.InfoType.COMMENT) {
+                && COMPOSE_SUPPORTED_TYPES.contains(item.getInfoType())) {
             return COMPOSE_HOLDER_TYPE;
         }
         switch (item.getInfoType()) {
@@ -384,6 +391,10 @@ public class InfoListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         super.onViewRecycled(holder);
         // Cancel any in-flight DeArrow fetch so a late result cannot write onto the recycled view.
         // StreamGrid/CardInfoItemHolder extend StreamInfoItemHolder, so both checks cover them.
+        // ComposeInfoItemHolder deliberately has no branch here: it owns no controller, and its
+        // per-item state is scoped to Compose effects that restart on the next bind. Its
+        // composition outlives recycling by design (DisposeOnViewTreeLifecycleDestroyed), so there
+        // is nothing to tear down at this point.
         if (holder instanceof StreamInfoItemHolder) {
             ((StreamInfoItemHolder) holder).disposeDeArrow();
         } else if (holder instanceof StreamMiniInfoItemHolder) {
