@@ -249,7 +249,7 @@ public final class DeArrowTitleFormatter {
 
     private static boolean isAllCaps(final String word) {
         return word != null
-                && hasLetter(word)
+                && hasCasedLetter(word)
                 && word.toUpperCase(Locale.ROOT).equals(word)
                 && !DOTTED_ACRONYM.matcher(word).matches()
                 && !SHORT_WORD_BEFORE_DASH.matcher(word).find();
@@ -320,10 +320,23 @@ public final class DeArrowTitleFormatter {
         return false;
     }
 
-    private static boolean hasLetter(final String word) {
+    /**
+     * Whether the word contains a letter that actually has a case distinction.
+     *
+     * <p>"Is this word SHOUTING?" is only a meaningful question for a cased script. In a caseless
+     * one -- CJK, Hangul, Arabic, Thai, Devanagari -- every character is a letter and uppercasing
+     * is the identity, so the plain {@code hasLetter && toUpperCase().equals(self)} test called
+     * every such word all-caps. A title made of caseless words plus one Latin acronym was then
+     * "mostly shouting", which switches off the deliberate-capitalization trust and re-cases the
+     * acronym ({@code CPU -> Cpu}). Requiring a cased letter keeps the shouting test to the
+     * scripts it means something in; a title that mixes caseless words with genuinely shouted
+     * Latin ones still trips it on those Latin words.</p>
+     */
+    private static boolean hasCasedLetter(final String word) {
         for (int i = 0; i < word.length(); ) {
             final int codePoint = word.codePointAt(i);
-            if (Character.isLetter(codePoint)) {
+            if (Character.isLetter(codePoint)
+                    && Character.toUpperCase(codePoint) != Character.toLowerCase(codePoint)) {
                 return true;
             }
             i += Character.charCount(codePoint);

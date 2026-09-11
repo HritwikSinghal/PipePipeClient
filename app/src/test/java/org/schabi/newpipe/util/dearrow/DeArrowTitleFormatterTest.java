@@ -298,4 +298,35 @@ public class DeArrowTitleFormatterTest {
         final DeArrowBranding b = branding(title("best of the 1980s", false, 1, false));
         assertEquals("Best of the 1980s", DeArrowTitleFormatter.selectTitle(b, true));
     }
+
+    // Caseless scripts are written as \\u escapes so this file stays pure ASCII. The literals are
+    // Japanese ("nihongo no" ... "review") and Korean ("hangugeo" ... "teseuteu").
+
+    @Test
+    public void caselessScriptTitleIsNotTreatedAsShouting() {
+        // Every character of a CJK/Hangul/Arabic/Thai word is a letter whose uppercase form is
+        // itself, so the all-caps test used to match such words and call the whole title
+        // "shouting" -- which switched off the deliberate-capitalization trust and re-cased the
+        // one real acronym in it (CPU -> Cpu). Nothing here is shouted, so nothing changes.
+        final String input = "\u65e5\u672c\u8a9e\u306e CPU \u30ec\u30d3\u30e5\u30fc";
+        final DeArrowBranding b = branding(title(input, false, 1, false));
+        assertEquals(input, DeArrowTitleFormatter.selectTitle(b, true));
+    }
+
+    @Test
+    public void caselessScriptTitleKeepsAnAcronymInHangul() {
+        final String input = "\ud55c\uad6d\uc5b4 DNA \ud14c\uc2a4\ud2b8";
+        final DeArrowBranding b = branding(title(input, false, 1, false));
+        assertEquals(input, DeArrowTitleFormatter.selectTitle(b, true));
+    }
+
+    @Test
+    public void shoutedLatinIsStillReCasedAlongsideCaselessWords() {
+        // The counterpart to the two above: caseless words no longer count toward "shouting", but
+        // a title whose CASED words are shouted must still be re-cased.
+        final DeArrowBranding b = branding(
+                title("AMAZING \u65e5\u672c\u8a9e TRICK", false, 1, false));
+        assertEquals("Amazing \u65e5\u672c\u8a9e Trick",
+                DeArrowTitleFormatter.selectTitle(b, true));
+    }
 }
