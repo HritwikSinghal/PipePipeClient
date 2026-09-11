@@ -122,7 +122,7 @@ public final class DeArrowPrefetcher {
                     if (videoId == null) {
                         return Observable.<DeArrowBranding>empty();
                     }
-                    return DeArrowService.getInstance().getBranding(videoId)
+                    return DeArrowService.getInstance().getBrandingSpeculative(videoId)
                             .doOnSuccess(branding -> {
                                 if (thumbsOn) {
                                     warmThumbnail(videoId, branding);
