@@ -134,19 +134,24 @@ public class LocalItemListAdapter extends RecyclerView.Adapter<RecyclerView.View
         }
 
         // Warm DeArrow branding/thumbnails for this page so they are ready before the rows bind.
-        // The experimental Compose holders are deliberately DeArrow-blind for now, so under that UI
-        // a prefetch would only spend requests on results no row can ever render.
-        if (!ThemeHelper.shouldUseExperimentalNewUi(localItemBuilder.getContext())) {
-            final List<StreamInfoItem> streams = new ArrayList<>();
-            for (final LocalItem item : data) {
-                final StreamEntity entity = streamEntityOf(item);
-                if (entity != null) {
-                    streams.add(entity.toStreamInfoItem());
-                }
+        // Both UIs render DeArrow now (the Compose holders via DeArrowComposeItem), so this is no
+        // longer gated on the experimental-UI flag.
+        //
+        // Only the prefetch window is converted. This runs on the main thread and `data` is a whole
+        // playlist or history page -- converting a 1000-entry playlist to StreamInfoItems to hand
+        // the prefetcher a list it immediately truncates to its first 25 was pure jank.
+        final List<StreamInfoItem> streams = new ArrayList<>();
+        for (final LocalItem item : data) {
+            if (streams.size() >= DeArrowPrefetcher.MAX_PREFETCH_ITEMS) {
+                break;
             }
-            if (!streams.isEmpty()) {
-                DeArrowPrefetcher.prefetch(localItemBuilder.getContext(), streams);
+            final StreamEntity entity = streamEntityOf(item);
+            if (entity != null) {
+                streams.add(entity.toStreamInfoItem());
             }
+        }
+        if (!streams.isEmpty()) {
+            DeArrowPrefetcher.prefetch(localItemBuilder.getContext(), streams);
         }
 
         notifyDataSetChanged();
