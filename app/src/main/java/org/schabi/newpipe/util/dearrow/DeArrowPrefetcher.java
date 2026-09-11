@@ -49,14 +49,24 @@ import io.reactivex.rxjava3.schedulers.Schedulers;
  * down. Concurrency is capped to stay polite to the DeArrow API.</p>
  */
 public final class DeArrowPrefetcher {
-    /** Max simultaneous bucket fetches, to avoid a burst against the DeArrow API on page load. */
-    private static final int MAX_CONCURRENCY = 2;
+    /**
+     * Max simultaneous bucket fetches for a page warm.
+     *
+     * <p>One, because this is speculative work for rows that may never be looked at, and it shares
+     * {@link DeArrowService}'s bounded fetch pool with the bind-time fetches that a visible row
+     * <i>is</i> waiting on. Leaving a warm able to fill that pool would trade a faster warm for a
+     * slower row, which is the wrong way round.</p>
+     */
+    private static final int MAX_CONCURRENCY = 1;
     /**
      * Warm at most this many items per page -- a viewport-sized window, not the whole feed. The
      * single DeArrow host rate-limits (returns 5xx) under a full-page burst, so we front-load only
      * a screenful-plus and let bind-time resolution cover the rest as the user scrolls. Tunable.
+     *
+     * <p>Public so a caller that has to <i>build</i> the list it passes here can stop at the same
+     * bound instead of converting a whole page for a warm that keeps the first slice of it.</p>
      */
-    private static final int MAX_PREFETCH_ITEMS = 25;
+    public static final int MAX_PREFETCH_ITEMS = 25;
 
     // Diagnostic logging, compiled out of release builds (BuildConfig.DEBUG == false there).
     private static final String TAG = "DeArrowPerf";

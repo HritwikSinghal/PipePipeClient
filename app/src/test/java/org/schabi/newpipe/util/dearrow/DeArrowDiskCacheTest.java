@@ -68,7 +68,7 @@ public class DeArrowDiskCacheTest {
         final String json = "{\"dQw4w9WgXcQ\":{\"titles\":[],\"thumbnails\":[]}}";
         final long fetchedAt = 1_700_000_000_123L;
 
-        cache.write("a1b2", json, fetchedAt);
+        cache.write("a1b2", json, fetchedAt, null);
 
         final DeArrowDiskCache.DiskEntry entry = cache.read("a1b2");
         assertNotNull(entry);
@@ -77,11 +77,57 @@ public class DeArrowDiskCacheTest {
     }
 
     @Test
+    public void etagRoundTrip() {
+        final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
+        final String json = "{\"dQw4w9WgXcQ\":{\"titles\":[],\"thumbnails\":[]}}";
+        final String etag = "\"brandingHash;6fe0;YouTube;1789119806000\"";
+
+        cache.write("a1b2", json, 1_700_000_000_123L, etag);
+
+        final DeArrowDiskCache.DiskEntry entry = cache.read("a1b2");
+        assertNotNull(entry);
+        assertEquals(etag, entry.etag);
+        assertEquals(json, entry.rawJson);
+        assertEquals(1_700_000_000_123L, entry.fetchedAtMs);
+    }
+
+    @Test
+    public void entryWrittenBeforeEtagsReadsBackWithoutOne() throws IOException {
+        // A file in the pre-ETag format -- header line is the timestamp alone, no tab. It must
+        // still read as a valid entry, or every user's existing cache would be discarded on
+        // upgrade and re-downloaded in full.
+        final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
+        assertTrue(cacheDir().mkdirs());
+        final File legacy = new File(cacheDir(), "d4d4");
+        Files.write(legacy.toPath(),
+                "1700000000123\n{\"abc\":{}}".getBytes(StandardCharsets.UTF_8));
+
+        final DeArrowDiskCache.DiskEntry entry = cache.read("d4d4");
+        assertNotNull(entry);
+        assertNull(entry.etag);
+        assertEquals("{\"abc\":{}}", entry.rawJson);
+        assertEquals(1_700_000_000_123L, entry.fetchedAtMs);
+    }
+
+    @Test
+    public void etagContainingATabIsDroppedRatherThanCorruptingTheHeader() {
+        // A tab would be read back as the field separator and split the header in the wrong place.
+        final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
+        cache.write("beef", "{\"x\":{}}", 1_700_000_000_123L, "bad\tetag");
+
+        final DeArrowDiskCache.DiskEntry entry = cache.read("beef");
+        assertNotNull(entry);
+        assertNull(entry.etag);
+        assertEquals("{\"x\":{}}", entry.rawJson);
+        assertEquals(1_700_000_000_123L, entry.fetchedAtMs);
+    }
+
+    @Test
     public void negativeCacheRoundTrip() throws JsonParserException {
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
         final long fetchedAt = 1_700_000_001_000L;
 
-        cache.write("00ff", "{}", fetchedAt);
+        cache.write("00ff", "{}", fetchedAt, null);
 
         final DeArrowDiskCache.DiskEntry entry = cache.read("00ff");
         assertNotNull(entry);
@@ -126,7 +172,7 @@ public class DeArrowDiskCacheTest {
                 + "}";
         final long fetchedAt = 1_700_000_002_000L;
 
-        cache.write("beef", pretty, fetchedAt);
+        cache.write("beef", pretty, fetchedAt, null);
 
         final DeArrowDiskCache.DiskEntry entry = cache.read("beef");
         assertNotNull(entry);
@@ -147,7 +193,7 @@ public class DeArrowDiskCacheTest {
                 + "\"thumbnails\":[]}}";
         final long fetchedAt = 1_700_000_003_000L;
 
-        cache.write("f00d", json, fetchedAt);
+        cache.write("f00d", json, fetchedAt, null);
 
         final DeArrowDiskCache.DiskEntry entry = cache.read("f00d");
         assertNotNull(entry);
@@ -172,7 +218,7 @@ public class DeArrowDiskCacheTest {
         assertTrue(json.length() > 4 * 8192);
         final long fetchedAt = 1_700_000_004_000L;
 
-        cache.write("cafe", json, fetchedAt);
+        cache.write("cafe", json, fetchedAt, null);
 
         final DeArrowDiskCache.DiskEntry entry = cache.read("cafe");
         assertNotNull(entry);
@@ -185,8 +231,8 @@ public class DeArrowDiskCacheTest {
     public void atomicOverwriteReplaces() {
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
 
-        cache.write("c0de", "{\"first\":{}}", 1L);
-        cache.write("c0de", "{\"second\":{}}", 2L);
+        cache.write("c0de", "{\"first\":{}}", 1L, null);
+        cache.write("c0de", "{\"second\":{}}", 2L, null);
 
         final DeArrowDiskCache.DiskEntry entry = cache.read("c0de");
         assertNotNull(entry);
@@ -223,7 +269,7 @@ public class DeArrowDiskCacheTest {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                cache.write("a1b2", bodies[index], baseFetchedAt + index);
+                cache.write("a1b2", bodies[index], baseFetchedAt + index, null);
             });
             threads[i].start();
         }
@@ -261,9 +307,9 @@ public class DeArrowDiskCacheTest {
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
         final long now = System.currentTimeMillis();
 
-        cache.write("old0", "{}", now);
-        cache.write("new0", "{}", now);
-        cache.write("new1", "{}", now);
+        cache.write("old0", "{}", now, null);
+        cache.write("new0", "{}", now, null);
+        cache.write("new1", "{}", now, null);
 
         final File old = new File(cacheDir(), "old0");
         assertTrue(old.setLastModified(now - 40L * DAY_MS));
@@ -282,7 +328,7 @@ public class DeArrowDiskCacheTest {
 
         final String[] prefixes = {"e000", "e001", "e002", "e003", "e004"};
         for (int i = 0; i < prefixes.length; i++) {
-            cache.write(prefixes[i], "{}", now);
+            cache.write(prefixes[i], "{}", now, null);
             final File f = new File(cacheDir(), prefixes[i]);
             // strictly increasing mtime: e000 oldest, e004 newest
             assertTrue(f.setLastModified(now - (prefixes.length - i) * 1000L));
@@ -302,8 +348,8 @@ public class DeArrowDiskCacheTest {
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
         final long now = System.currentTimeMillis();
 
-        cache.write("keep", "{}", now);
-        cache.write("aged", "{}", now);
+        cache.write("keep", "{}", now, null);
+        cache.write("aged", "{}", now, null);
         assertTrue(new File(cacheDir(), "aged").setLastModified(now - 40L * DAY_MS));
 
         // one orphan from a process killed mid-write, one belonging to a write in flight right
@@ -335,7 +381,7 @@ public class DeArrowDiskCacheTest {
 
         final String[] prefixes = {"d000", "d001", "d002"};
         for (int i = 0; i < prefixes.length; i++) {
-            cache.write(prefixes[i], "{}", now);
+            cache.write(prefixes[i], "{}", now, null);
             final File f = new File(cacheDir(), prefixes[i]);
             // strictly increasing mtime: d000 is what a miscounted cap would evict first
             assertTrue(f.setLastModified(now - (prefixes.length - i) * 1000L));
@@ -358,7 +404,7 @@ public class DeArrowDiskCacheTest {
         assertTrue(folder.newFile("dearrow").isFile());
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
 
-        cache.write("a1b2", "{}", 1L);
+        cache.write("a1b2", "{}", 1L, null);
         assertNull(cache.read("a1b2"));
 
         cache.enforceBounds(10, DAY_MS);
@@ -369,7 +415,7 @@ public class DeArrowDiskCacheTest {
     @Test
     public void writeToAReadOnlyDirDegradesToAMiss() throws IOException {
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
-        cache.write("a1b2", "{\"before\":{}}", 7L);
+        cache.write("a1b2", "{\"before\":{}}", 7L, null);
         assertNotNull(cache.read("a1b2"));
 
         final File dir = cacheDir();
@@ -380,7 +426,7 @@ public class DeArrowDiskCacheTest {
             // cannot be produced here, so skip rather than assert something untrue
             assumeFalse("directory is still writable without the write bit", canCreateFileIn(dir));
 
-            cache.write("c0de", "{\"after\":{}}", 8L);
+            cache.write("c0de", "{\"after\":{}}", 8L, null);
 
             assertNull(cache.read("c0de"));
             // an unwritable cache degrades to read-only, not to broken
@@ -398,9 +444,9 @@ public class DeArrowDiskCacheTest {
     public void clearRemovesAll() {
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
 
-        cache.write("aaaa", "{}", 1L);
-        cache.write("bbbb", "{}", 2L);
-        cache.write("cccc", "{}", 3L);
+        cache.write("aaaa", "{}", 1L, null);
+        cache.write("bbbb", "{}", 2L, null);
+        cache.write("cccc", "{}", 3L, null);
 
         cache.clear();
 
