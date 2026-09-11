@@ -27,12 +27,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.core.Maybe;
+import io.reactivex.rxjava3.core.Scheduler;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 
 /**
@@ -57,6 +59,9 @@ public final class DeArrowService {
             "PipePipe DeArrow (+https://github.com/HritwikSinghal/PipePipe)";
     private static final int HASH_PREFIX_LENGTH = 4;
     private static final int HTTP_OK = 200;
+    // The server answers a conditional revalidation with 304 when the bucket has not changed: no
+    // body, so the ~17KB we already hold on disk stands and only its freshness needs updating.
+    private static final int HTTP_NOT_MODIFIED = 304;
     // The ONLY genuine negative: 404 means this bucket truly has no branding -> safe to cache.
     private static final int HTTP_NOT_FOUND = 404;
     private static final int MAX_CACHED_BUCKETS = 256;
@@ -79,12 +84,35 @@ public final class DeArrowService {
     // Re-run the disk sweep every N writes, so a single long session cannot grow past the cap.
     private static final int ENFORCE_BOUNDS_EVERY_WRITES = 64;
     private static final int BODY_BUFFER_BYTES = 8192;
+    // Hard cap on simultaneous requests to the single volunteer-run DeArrow host, applied where the
+    // requests are issued rather than at each caller. Schedulers.io() is unbounded, so every caller
+    // that reached it was its own private limit -- and backgroundRefresh had none at all: a cold
+    // start against a warm-but-stale disk cache fired one refresh per distinct prefix on screen,
+    // all at once.
+    //
+    // Three, deliberately more than DeArrowPrefetcher's own gate of 1: a speculative page warm and
+    // a visible row's bind share this pool, so sizing the two equal would let the warm occupy every
+    // thread while the row the user is looking at queues behind it. (A bind for a bucket the warm
+    // is already fetching does not queue at all -- inFlight joins it.)
+    private static final int MAX_FETCH_THREADS = 3;
+    // Refreshes are strictly off the critical path (a stale bucket has already been served), so
+    // they get their own single low-priority thread: bounded, and unable to queue in front of a
+    // fetch that a visible row is actually waiting on.
+    private static final int MAX_REFRESH_THREADS = 1;
 
     // Diagnostic logging, compiled out of release builds (BuildConfig.DEBUG == false there).
     private static final String TAG = "DeArrowPerf";
     private static final boolean DEBUG = BuildConfig.DEBUG;
 
     private static DeArrowService instance;
+
+    /** Every foreground bucket fetch runs here, so at most {@link #MAX_FETCH_THREADS} are in the
+     *  air at once whatever mix of binds, prefetches and filters asked for them. */
+    private static final Scheduler FETCH_SCHEDULER =
+            boundedScheduler(MAX_FETCH_THREADS, "DeArrow-fetch", Thread.NORM_PRIORITY - 1);
+    /** Stale-while-revalidate refreshes; see {@link #MAX_REFRESH_THREADS}. */
+    private static final Scheduler REFRESH_SCHEDULER =
+            boundedScheduler(MAX_REFRESH_THREADS, "DeArrow-refresh", Thread.MIN_PRIORITY);
 
     private final LruCache<String, BucketResult> cache = new LruCache<>(MAX_CACHED_BUCKETS);
     private final ConcurrentHashMap<String, Maybe<BucketResult>> inFlight =
@@ -102,6 +130,25 @@ public final class DeArrowService {
     private volatile DeArrowDiskCache diskCache;
 
     private DeArrowService() {
+    }
+
+    /**
+     * A fixed-size scheduler of daemon threads, so a pending DeArrow fetch can never hold the
+     * process open and the pool size is the concurrency limit.
+     *
+     * @param threads  the pool size, which is the maximum concurrency
+     * @param name     the thread name, for logs and traces
+     * @param priority the thread priority; below normal, since branding is decorative
+     * @return the scheduler
+     */
+    private static Scheduler boundedScheduler(final int threads, final String name,
+                                              final int priority) {
+        return Schedulers.from(Executors.newFixedThreadPool(threads, runnable -> {
+            final Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            thread.setPriority(priority);
+            return thread;
+        }));
     }
 
     public static synchronized DeArrowService getInstance() {
@@ -254,7 +301,10 @@ public final class DeArrowService {
                         }
                         return Maybe.just(disk);
                     })
-                    .switchIfEmpty(Maybe.defer(() -> fetchBucket(key, generation)))
+                    // revalidate=false: reaching here means the disk had nothing, so there is no
+                    // copy to revalidate against.
+                    .switchIfEmpty(Maybe.defer(
+                            () -> fetchBucket(key, generation, FETCH_SCHEDULER, false)))
                     .doOnSuccess(result -> cachePut(key, result, generation))
                     .doFinally(() -> inFlight.remove(key, published.get()))
                     // Upstream of cache(), so doFinally fires exactly once however many
@@ -283,7 +333,12 @@ public final class DeArrowService {
             return;
         }
         final int generation = cacheGeneration.get();
-        fetchBucket(prefix, generation)
+        // REFRESH_SCHEDULER, not the foreground pool: this subscribes outside every caller's
+        // concurrency gate (the chain that triggered it has already resolved from the stale disk
+        // entry and completed), so the scheduler is the only thing bounding it.
+        // revalidate=true: a stale disk entry is exactly what got us here, so send its ETag and
+        // let the server answer 304 when nothing has changed.
+        fetchBucket(prefix, generation, REFRESH_SCHEDULER, true)
                 .doOnSuccess(fresh -> cachePut(prefix, fresh, generation))
                 .doFinally(() -> refreshInFlight.remove(prefix))
                 .subscribe(r -> { }, e -> { });
@@ -326,12 +381,12 @@ public final class DeArrowService {
     }
 
     private void diskWrite(final String prefix, final String rawJson, final long fetchedAtMs,
-                           final int generation) {
+                           @Nullable final String etag, final int generation) {
         final DeArrowDiskCache dc = diskCache;
         if (dc == null || generation != cacheGeneration.get()) {
             return;
         }
-        dc.write(prefix, rawJson, fetchedAtMs);
+        dc.write(prefix, rawJson, fetchedAtMs, etag);
         // The startup sweep alone lets one long session grow past the cap without limit. Re-sweep
         // periodically, on a separate io task so it never lands on a fetch's own thread.
         if (diskWrites.incrementAndGet() % ENFORCE_BOUNDS_EVERY_WRITES == 0) {
@@ -339,9 +394,22 @@ public final class DeArrowService {
         }
     }
 
-    private Maybe<BucketResult> fetchBucket(final String prefix, final int generation) {
-        return Maybe.<BucketResult>fromCallable(() -> fetchBucketNow(prefix, generation))
-                .subscribeOn(Schedulers.io())
+    /**
+     * Fetch one bucket over the network, with the bounded retry ladder.
+     *
+     * @param prefix     the hash prefix bucket to fetch
+     * @param generation the cache generation this fetch started under
+     * @param scheduler  the bounded pool the request runs on, which is what caps concurrency
+     *                   against the DeArrow host -- see {@link #MAX_FETCH_THREADS}
+     * @param revalidate whether a cached copy exists to revalidate conditionally rather than
+     *                   re-download; true only on the stale-refresh path
+     * @return the parsed bucket, or empty if it could not be fetched
+     */
+    private Maybe<BucketResult> fetchBucket(final String prefix, final int generation,
+                                            final Scheduler scheduler, final boolean revalidate) {
+        return Maybe.<BucketResult>fromCallable(
+                        () -> fetchBucketNow(prefix, generation, revalidate))
+                .subscribeOn(scheduler)
                 .retryWhen(errors -> {
                     final AtomicInteger attempts = new AtomicInteger();
                     return errors.flatMap(error -> {
@@ -379,7 +447,8 @@ public final class DeArrowService {
      *                             so a later view can re-fetch.
      */
     @Nullable
-    private BucketResult fetchBucketNow(final String prefix, final int generation)
+    private BucketResult fetchBucketNow(final String prefix, final int generation,
+                                        final boolean revalidate)
             throws IOException, JsonParserException {
         final long holdRemainingMs = rateLimitedUntilMs - System.currentTimeMillis();
         // The upper bound catches a backwards wall-clock jump, which would otherwise leave the
@@ -393,15 +462,24 @@ public final class DeArrowService {
             return null;
         }
 
+        // On the stale-refresh path we already hold a copy of this bucket; read it back so the
+        // request can be conditional. The disk read costs one small file open on a background
+        // thread, against re-downloading ~17KB that has usually not changed.
+        final DeArrowDiskCache dc = diskCache;
+        final DeArrowDiskCache.DiskEntry cached = (revalidate && dc != null) ? dc.read(prefix) : null;
+        final String knownEtag = cached == null ? null : cached.etag;
+
         final long startMs = System.currentTimeMillis();
         final int code;
         final String body;
+        final String newEtag;
         // Null localization: an Accept-Language header would only add identifying entropy to a
         // request whose whole point is to be indistinguishable from other clients'.
         try (StreamingResponse response = NewPipe.getDownloader().getStreaming(
-                BRANDING_ENDPOINT + prefix, requestHeaders(), null, FETCH_TIMEOUT_MS)) {
+                BRANDING_ENDPOINT + prefix, requestHeaders(knownEtag), null, FETCH_TIMEOUT_MS)) {
             code = response.responseCode();
             body = code == HTTP_OK ? readBody(response.body()) : "";
+            newEtag = response.getHeader("ETag");
         } catch (final ReCaptchaException e) {
             // The downloader converts every HTTP 429 into this before the response -- and its
             // Retry-After header -- is visible here, so we cannot honour the server's own hint
@@ -416,6 +494,18 @@ public final class DeArrowService {
         }
         final long elapsedMs = System.currentTimeMillis() - startMs;
 
+        if (code == HTTP_NOT_MODIFIED && cached != null) {
+            // Unchanged since we stored it: keep the body, just mark it fresh for another TTL.
+            // This is the cheap path a daily user hits for most of their buckets -- a few hundred
+            // bytes of headers instead of a full bucket re-download.
+            if (DEBUG) {
+                Log.d(TAG, "fetch " + prefix + " code=304 (revalidated, body reused) in "
+                        + elapsedMs + "ms");
+            }
+            final long now = System.currentTimeMillis();
+            diskWrite(prefix, cached.rawJson, now, knownEtag, generation);
+            return new BucketResult(DeArrowResponseParser.parseBucket(cached.rawJson), now);
+        }
         if (code == HTTP_OK) {
             final Map<String, DeArrowBranding> entries = DeArrowResponseParser.parseBucket(body);
             if (DEBUG) {
@@ -423,7 +513,7 @@ public final class DeArrowService {
                         + " in " + elapsedMs + "ms");
             }
             final long now = System.currentTimeMillis();
-            diskWrite(prefix, body, now, generation);
+            diskWrite(prefix, body, now, newEtag, generation);
             return new BucketResult(entries, now);
         }
         if (code == HTTP_NOT_FOUND) {
@@ -433,7 +523,7 @@ public final class DeArrowService {
                         + elapsedMs + "ms");
             }
             final long now = System.currentTimeMillis();
-            diskWrite(prefix, "{}", now, generation);
+            diskWrite(prefix, "{}", now, newEtag, generation);
             return new BucketResult(Collections.emptyMap(), now);
         }
         // 5xx / any other non-200 == transient. Surface as an IOException so it is retried by the
@@ -483,12 +573,20 @@ public final class DeArrowService {
      * requests to one identity, defeating the k-anonymity the prefix scheme exists to provide.
      * An empty value list marks the header as caller-supplied without putting anything on the
      * wire, because the downloader only sets a header for a value list of size one or more.</p>
+     *
+     * @param knownEtag the ETag of the copy already held for this bucket, or {@code null} to make
+     *                  an unconditional request. When present the server may answer 304 with no
+     *                  body, which is the point: a stale bucket is usually still current.
+     * @return the headers for one branding request
      */
     @NonNull
-    private static Map<String, List<String>> requestHeaders() {
+    private static Map<String, List<String>> requestHeaders(@Nullable final String knownEtag) {
         final Map<String, List<String>> headers = new HashMap<>();
         headers.put("User-Agent", Collections.singletonList(USER_AGENT));
         headers.put("Cookie", Collections.emptyList());
+        if (knownEtag != null && !knownEtag.isEmpty()) {
+            headers.put("If-None-Match", Collections.singletonList(knownEtag));
+        }
         return headers;
     }
 

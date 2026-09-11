@@ -1,5 +1,7 @@
 package org.schabi.newpipe.util.dearrow;
 
+import androidx.annotation.Nullable;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -23,7 +25,9 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Each prefix bucket is stored as one file named exactly after its 4-hex-char prefix under
  * {@code <cacheDir>/dearrow}. The file layout is: line 1 is the epoch-millis fetch time as a
- * decimal long, followed by a single {@code '\n'}, followed by the raw JSON body verbatim. Because
+ * decimal long, optionally followed by a tab and the response's ETag, then a single {@code '\n'},
+ * then the raw JSON body verbatim. The ETag is optional so that files written before it was stored
+ * still read as valid entries (with no ETag), rather than being discarded as corrupt. Because
  * the JSON body may itself contain newlines, readers split only at the <i>first</i> newline. Writes
  * are atomic (unique temp file plus rename) and every operation is best-effort -- any I/O or parse
  * failure degrades gracefully to a cache miss rather than throwing.</p>
@@ -48,14 +52,18 @@ final class DeArrowDiskCache {
         this.dir = dir;
     }
 
-    /** One decoded cache entry: the raw bucket JSON body and when it was fetched. */
+    /** One decoded cache entry: the raw bucket JSON body, when it was fetched, and its ETag. */
     static final class DiskEntry {
         final String rawJson;
         final long fetchedAtMs;
+        /** The server's ETag for this body, for conditional revalidation; {@code null} if unknown. */
+        @Nullable
+        final String etag;
 
-        DiskEntry(final String rawJson, final long fetchedAtMs) {
+        DiskEntry(final String rawJson, final long fetchedAtMs, @Nullable final String etag) {
             this.rawJson = rawJson;
             this.fetchedAtMs = fetchedAtMs;
+            this.etag = etag;
         }
     }
 
@@ -81,14 +89,20 @@ final class DeArrowDiskCache {
             if (newline < 0) {
                 return null;
             }
+            // Line 1 is "<fetchedAtMs>" or "<fetchedAtMs>\t<etag>". The tab is optional so that
+            // files written before ETags were stored still read cleanly, as an entry with no ETag.
+            final String header = content.substring(0, newline);
+            final int tab = header.indexOf('\t');
             final long fetchedAtMs;
             try {
-                fetchedAtMs = Long.parseLong(content.substring(0, newline));
+                fetchedAtMs = Long.parseLong(tab < 0 ? header : header.substring(0, tab));
             } catch (final NumberFormatException e) {
                 return null;
             }
+            final String etag = tab < 0 || tab + 1 >= header.length()
+                    ? null : header.substring(tab + 1);
             final String rawJson = content.substring(newline + 1);
-            return new DiskEntry(rawJson, fetchedAtMs);
+            return new DiskEntry(rawJson, fetchedAtMs, etag);
         } catch (final Throwable t) {
             return null;
         }
@@ -105,15 +119,22 @@ final class DeArrowDiskCache {
      * @param prefix      the 4-hex-char hash prefix (also the file name)
      * @param rawJson     the raw JSON body to store verbatim
      * @param fetchedAtMs the epoch-millis fetch time recorded on line 1
+     * @param etag        the server's ETag for this body, or {@code null} if it sent none. Stored
+     *                    after a tab on line 1 so a later refresh can revalidate instead of
+     *                    re-downloading. Dropped rather than stored if it contains a tab or a
+     *                    newline, which would corrupt the header line.
      */
-    void write(final String prefix, final String rawJson, final long fetchedAtMs) {
+    void write(final String prefix, final String rawJson, final long fetchedAtMs,
+               @Nullable final String etag) {
         if (!isSafePrefix(prefix)) {
             return;
         }
         final File tmp = new File(dir, prefix + "." + UUID.randomUUID() + TMP_SUFFIX);
         try {
             dir.mkdirs();
-            final byte[] content = (Long.toString(fetchedAtMs) + "\n" + rawJson)
+            final String header = isStorableEtag(etag)
+                    ? Long.toString(fetchedAtMs) + "\t" + etag : Long.toString(fetchedAtMs);
+            final byte[] content = (header + "\n" + rawJson)
                     .getBytes(StandardCharsets.UTF_8);
             try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(content);
@@ -205,6 +226,12 @@ final class DeArrowDiskCache {
         } catch (final Throwable t) {
             // best-effort: ignore
         }
+    }
+
+    /** Whether an ETag can go on the header line without corrupting it. */
+    private static boolean isStorableEtag(@Nullable final String etag) {
+        return etag != null && !etag.isEmpty()
+                && etag.indexOf('\t') < 0 && etag.indexOf('\n') < 0 && etag.indexOf('\r') < 0;
     }
 
     private static boolean isSafePrefix(final String prefix) {
