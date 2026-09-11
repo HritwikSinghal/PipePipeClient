@@ -45,6 +45,9 @@ final class DeArrowDiskCache {
     // A live write renames its temp file within milliseconds, so any temp file older than this is
     // an orphan left behind by a process that was killed mid-write.
     private static final long TMP_MAX_AGE_MS = TimeUnit.MINUTES.toMillis(5);
+    // Printable ASCII bounds for a storable ETag; see isStorableEtag.
+    private static final char MIN_PRINTABLE_ASCII = 0x21;
+    private static final char MAX_PRINTABLE_ASCII = 0x7e;
 
     private final File dir;
 
@@ -56,7 +59,7 @@ final class DeArrowDiskCache {
     static final class DiskEntry {
         final String rawJson;
         final long fetchedAtMs;
-        /** The server's ETag for this body, for conditional revalidation; {@code null} if unknown. */
+        /** The server's ETag for this body, for revalidation; {@code null} if unknown. */
         @Nullable
         final String etag;
 
@@ -228,10 +231,27 @@ final class DeArrowDiskCache {
         }
     }
 
-    /** Whether an ETag can go on the header line without corrupting it. */
+    /**
+     * Whether an ETag is safe to store and to send back later.
+     *
+     * <p>Restricted to printable ASCII, which is stricter than RFC 9110 (it also permits
+     * {@code obs-text}, %x80-FF). Two reasons: a tab or newline would corrupt the header line this
+     * is stored on, and OkHttp rejects any header value byte >= 0x7f with an
+     * {@link IllegalArgumentException} when the ETag is sent back as {@code If-None-Match}. That
+     * throw is not an {@link java.io.IOException}, so it would not be retried, and the offending
+     * ETag would stay on disk failing every future refresh of that bucket.</p>
+     */
     private static boolean isStorableEtag(@Nullable final String etag) {
-        return etag != null && !etag.isEmpty()
-                && etag.indexOf('\t') < 0 && etag.indexOf('\n') < 0 && etag.indexOf('\r') < 0;
+        if (etag == null || etag.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < etag.length(); i++) {
+            final char c = etag.charAt(i);
+            if (c < MIN_PRINTABLE_ASCII || c > MAX_PRINTABLE_ASCII) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isSafePrefix(final String prefix) {

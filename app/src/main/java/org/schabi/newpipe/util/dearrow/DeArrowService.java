@@ -76,7 +76,7 @@ public final class DeArrowService {
     private static final long RETRY_BASE_DELAY_MS = 500L;
     // Whole-call budget per bucket. The shared downloader client has a 30s read timeout, no call
     // timeout, and its own 3-attempt DNS retry loop, which under our own retry ladder could occupy
-    // one of only MAX_CONCURRENCY io threads for over a minute. Branding is decorative: if it is
+    // one of only MAX_FETCH_THREADS threads for over a minute. Branding is decorative: if it is
     // not here in a few seconds the user has already seen the original title.
     private static final long FETCH_TIMEOUT_MS = 5000L;
     // How long to stop fetching entirely after the server rate-limits us.
@@ -99,6 +99,14 @@ public final class DeArrowService {
     // they get their own single low-priority thread: bounded, and unable to queue in front of a
     // fetch that a visible row is actually waiting on.
     private static final int MAX_REFRESH_THREADS = 1;
+    // Page warms get their own thread too. DeArrowPrefetcher's own flatMap gate bounds ONE warm,
+    // not all of them -- it builds a fresh chain per call and there are four call sites -- so
+    // overlapping warms (a paginating feed plus a tab switch plus a playlist) could still take
+    // every foreground thread and put a visible row's fetch behind them.
+    private static final int MAX_PREFETCH_THREADS = 1;
+    // How long a queued fetch may wait before it is abandoned rather than run; see fetchBucketNow.
+    // Generous enough not to interfere with the retry ladder (2 retries at 5s + 0.5s/1s backoff).
+    private static final long MAX_QUEUE_WAIT_MS = 15_000L;
 
     // Diagnostic logging, compiled out of release builds (BuildConfig.DEBUG == false there).
     private static final String TAG = "DeArrowPerf";
@@ -113,6 +121,9 @@ public final class DeArrowService {
     /** Stale-while-revalidate refreshes; see {@link #MAX_REFRESH_THREADS}. */
     private static final Scheduler REFRESH_SCHEDULER =
             boundedScheduler(MAX_REFRESH_THREADS, "DeArrow-refresh", Thread.MIN_PRIORITY);
+    /** Speculative page warms; see {@link #MAX_PREFETCH_THREADS}. */
+    private static final Scheduler PREFETCH_SCHEDULER =
+            boundedScheduler(MAX_PREFETCH_THREADS, "DeArrow-prefetch", Thread.MIN_PRIORITY);
 
     private final LruCache<String, BucketResult> cache = new LruCache<>(MAX_CACHED_BUCKETS);
     private final ConcurrentHashMap<String, Maybe<BucketResult>> inFlight =
@@ -197,6 +208,24 @@ public final class DeArrowService {
      * @return the branding, or {@link Maybe#empty()} on a miss or any error
      */
     public Maybe<DeArrowBranding> getBranding(@Nullable final String videoId) {
+        return getBranding(videoId, FETCH_SCHEDULER);
+    }
+
+    /**
+     * As {@link #getBranding(String)}, but for speculative work -- a page warm nobody is waiting
+     * on. Any bucket it has to fetch runs on the prefetch pool, so it cannot occupy a thread that
+     * a visible row's fetch needs. A warm already in flight is still shared with a later bind
+     * through {@link #inFlight}, so the bind joins it rather than queueing a second request.
+     *
+     * @param videoId the platform video ID
+     * @return the branding, or {@link Maybe#empty()} on a miss or any error
+     */
+    public Maybe<DeArrowBranding> getBrandingSpeculative(@Nullable final String videoId) {
+        return getBranding(videoId, PREFETCH_SCHEDULER);
+    }
+
+    private Maybe<DeArrowBranding> getBranding(@Nullable final String videoId,
+                                               final Scheduler scheduler) {
         if (videoId == null || videoId.isEmpty()) {
             return Maybe.empty();
         }
@@ -204,7 +233,7 @@ public final class DeArrowService {
         if (prefix == null) {
             return Maybe.empty();
         }
-        return bucket(prefix).flatMap(result -> {
+        return bucket(prefix, scheduler).flatMap(result -> {
             final DeArrowBranding branding = result.entries.get(videoId);
             return branding == null ? Maybe.empty() : Maybe.just(branding);
         });
@@ -249,7 +278,7 @@ public final class DeArrowService {
      * for the lifetime of the process, outside the {@link LruCache} bound. See DeArrowPrefetcher,
      * which maps 25 items at a time behind a concurrency limit of 2.</p>
      */
-    private Maybe<BucketResult> bucket(final String prefix) {
+    private Maybe<BucketResult> bucket(final String prefix, final Scheduler scheduler) {
         return Maybe.defer(() -> {
             final BucketResult cached = cache.get(prefix);
             if (cached != null && !cached.isExpired(System.currentTimeMillis())) {
@@ -262,7 +291,7 @@ public final class DeArrowService {
                 Log.d(TAG, "bucket " + prefix + " MISS ("
                         + (inFlight.containsKey(prefix) ? "in-flight" : "cold") + ")");
             }
-            return sharedFetch(prefix);
+            return sharedFetch(prefix, scheduler);
         });
     }
 
@@ -270,7 +299,8 @@ public final class DeArrowService {
      * Join, or start, the single shared resolution of {@code prefix}. Called at subscribe time
      * only.
      */
-    private Maybe<BucketResult> sharedFetch(final String prefix) {
+    private Maybe<BucketResult> sharedFetch(final String prefix,
+                                            final Scheduler scheduler) {
         final int generation = cacheGeneration.get();
         // Holds the exact instance published to inFlight, so the terminal removal below can be
         // made conditional on identity: an unconditional remove(key) would evict whatever is
@@ -304,7 +334,7 @@ public final class DeArrowService {
                     // revalidate=false: reaching here means the disk had nothing, so there is no
                     // copy to revalidate against.
                     .switchIfEmpty(Maybe.defer(
-                            () -> fetchBucket(key, generation, FETCH_SCHEDULER, false)))
+                            () -> fetchBucket(key, generation, scheduler, false)))
                     .doOnSuccess(result -> cachePut(key, result, generation))
                     .doFinally(() -> inFlight.remove(key, published.get()))
                     // Upstream of cache(), so doFinally fires exactly once however many
@@ -407,8 +437,12 @@ public final class DeArrowService {
      */
     private Maybe<BucketResult> fetchBucket(final String prefix, final int generation,
                                             final Scheduler scheduler, final boolean revalidate) {
+        // Captured here, where the decision to fetch is made, rather than inside the callable,
+        // which only runs once a pool thread picks the task up -- the gap between the two is
+        // exactly the queue wait that fetchBucketNow checks.
+        final long queuedAtMs = System.currentTimeMillis();
         return Maybe.<BucketResult>fromCallable(
-                        () -> fetchBucketNow(prefix, generation, revalidate))
+                        () -> fetchBucketNow(prefix, generation, revalidate, queuedAtMs))
                 .subscribeOn(scheduler)
                 .retryWhen(errors -> {
                     final AtomicInteger attempts = new AtomicInteger();
@@ -448,8 +482,29 @@ public final class DeArrowService {
      */
     @Nullable
     private BucketResult fetchBucketNow(final String prefix, final int generation,
-                                        final boolean revalidate)
+                                        final boolean revalidate, final long queuedAtMs)
             throws IOException, JsonParserException {
+        // The pools have unbounded FIFO queues and nothing cancels a queued task -- disposing a
+        // recycled row's subscription does not dispose the shared upstream. A fling past a hundred
+        // cold rows therefore leaves a long backlog, and the row the user actually stops on queues
+        // behind all of it. Abandoning tasks that waited too long drains that backlog in
+        // microseconds instead of a network call each. Returning null is the existing
+        // "no answer, cache nothing" path, so the row simply keeps its original.
+        final long waitedMs = System.currentTimeMillis() - queuedAtMs;
+        if (waitedMs > MAX_QUEUE_WAIT_MS) {
+            if (DEBUG) {
+                Log.d(TAG, "fetch " + prefix + " ABANDONED (queued " + waitedMs + "ms)");
+            }
+            return null;
+        }
+        // Likewise pointless once the caches have been cleared underneath this task.
+        if (generation != cacheGeneration.get()) {
+            if (DEBUG) {
+                Log.d(TAG, "fetch " + prefix + " ABANDONED (cache cleared while queued)");
+            }
+            return null;
+        }
+
         final long holdRemainingMs = rateLimitedUntilMs - System.currentTimeMillis();
         // The upper bound catches a backwards wall-clock jump, which would otherwise leave the
         // hold stuck far into the future. Resolving to null (not an error) means nothing is
@@ -466,7 +521,8 @@ public final class DeArrowService {
         // request can be conditional. The disk read costs one small file open on a background
         // thread, against re-downloading ~17KB that has usually not changed.
         final DeArrowDiskCache dc = diskCache;
-        final DeArrowDiskCache.DiskEntry cached = (revalidate && dc != null) ? dc.read(prefix) : null;
+        final DeArrowDiskCache.DiskEntry cached =
+                (revalidate && dc != null) ? dc.read(prefix) : null;
         final String knownEtag = cached == null ? null : cached.etag;
 
         final long startMs = System.currentTimeMillis();
@@ -502,9 +558,16 @@ public final class DeArrowService {
                 Log.d(TAG, "fetch " + prefix + " code=304 (revalidated, body reused) in "
                         + elapsedMs + "ms");
             }
+            // Parse BEFORE writing, exactly as the 200 path below does, and for the same reason.
+            // A body that fails to parse must not have its fetchedAtMs and mtime bumped: that
+            // would make it un-expirable by both MAX_STALE_MS and enforceBounds' age sweep, and
+            // every later refresh would re-stamp it -- permanent, silent branding loss for every
+            // video in this prefix.
+            final Map<String, DeArrowBranding> entries =
+                    DeArrowResponseParser.parseBucket(cached.rawJson);
             final long now = System.currentTimeMillis();
             diskWrite(prefix, cached.rawJson, now, knownEtag, generation);
-            return new BucketResult(DeArrowResponseParser.parseBucket(cached.rawJson), now);
+            return new BucketResult(entries, now);
         }
         if (code == HTTP_OK) {
             final Map<String, DeArrowBranding> entries = DeArrowResponseParser.parseBucket(body);

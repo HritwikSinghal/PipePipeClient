@@ -110,6 +110,22 @@ public class DeArrowDiskCacheTest {
     }
 
     @Test
+    public void etagWithNonAsciiIsDroppedSoItCannotBreakTheNextRequest() {
+        // RFC 9110 allows obs-text (%x80-FF) in an ETag, but OkHttp throws IllegalArgumentException
+        // on any header byte >= 0x7f when sending it back as If-None-Match. That throw is not an
+        // IOException, so it would not be retried, and the ETag would sit on disk failing every
+        // future refresh of this bucket.
+        final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
+        // Escaped, not a literal accented char, so this source file stays ASCII.
+        cache.write("f00f", "{\"x\":{}}", 1_700_000_000_123L, "\"caf\u00e9\"");
+
+        final DeArrowDiskCache.DiskEntry entry = cache.read("f00f");
+        assertNotNull(entry);
+        assertNull(entry.etag);
+        assertEquals("{\"x\":{}}", entry.rawJson);
+    }
+
+    @Test
     public void etagContainingATabIsDroppedRatherThanCorruptingTheHeader() {
         // A tab would be read back as the field separator and split the header in the wrong place.
         final DeArrowDiskCache cache = new DeArrowDiskCache(cacheDir());
