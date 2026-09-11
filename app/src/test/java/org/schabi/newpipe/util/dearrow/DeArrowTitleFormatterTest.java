@@ -14,7 +14,7 @@ public class DeArrowTitleFormatterTest {
                                       final boolean original,
                                       final int votes,
                                       final boolean locked) {
-        return new DeArrowTitle(text, original, votes, locked, "uuid-" + text);
+        return new DeArrowTitle(text, original, votes, locked);
     }
 
     private static DeArrowBranding branding(final DeArrowTitle... titles) {

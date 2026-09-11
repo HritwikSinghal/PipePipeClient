@@ -65,8 +65,7 @@ public final class DeArrowResponseParser {
                 obj.getString("title", ""),
                 obj.getBoolean("original", false),
                 obj.getInt("votes", 0),
-                obj.getBoolean("locked", false),
-                obj.getString("UUID", ""));
+                obj.getBoolean("locked", false));
     }
 
     private static DeArrowThumbnail parseThumbnail(final JsonObject obj) {
@@ -74,7 +73,6 @@ public final class DeArrowResponseParser {
                 obj.getDouble("timestamp", Double.NaN),
                 obj.getBoolean("original", false),
                 obj.getInt("votes", 0),
-                obj.getBoolean("locked", false),
-                obj.getString("UUID", ""));
+                obj.getBoolean("locked", false));
     }
 }

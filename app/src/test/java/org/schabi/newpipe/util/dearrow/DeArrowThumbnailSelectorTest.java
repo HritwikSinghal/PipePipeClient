@@ -15,7 +15,7 @@ public class DeArrowThumbnailSelectorTest {
 
     private static DeArrowThumbnail thumb(final double timestamp, final boolean original,
                                           final int votes, final boolean locked) {
-        return new DeArrowThumbnail(timestamp, original, votes, locked, "uuid");
+        return new DeArrowThumbnail(timestamp, original, votes, locked);
     }
 
     private static DeArrowBranding branding(final List<DeArrowThumbnail> thumbs,
