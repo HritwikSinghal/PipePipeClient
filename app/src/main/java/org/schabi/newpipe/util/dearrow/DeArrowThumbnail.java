@@ -11,18 +11,15 @@ public final class DeArrowThumbnail {
     private final boolean original;
     private final int votes;
     private final boolean locked;
-    private final String uuid;
 
     public DeArrowThumbnail(final double timestamp,
                             final boolean original,
                             final int votes,
-                            final boolean locked,
-                            final String uuid) {
+                            final boolean locked) {
         this.timestamp = timestamp;
         this.original = original;
         this.votes = votes;
         this.locked = locked;
-        this.uuid = uuid;
     }
 
     public double getTimestamp() {
@@ -43,9 +40,5 @@ public final class DeArrowThumbnail {
 
     public boolean isLocked() {
         return locked;
-    }
-
-    public String getUuid() {
-        return uuid;
     }
 }
