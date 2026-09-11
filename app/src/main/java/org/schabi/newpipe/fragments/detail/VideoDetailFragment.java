@@ -52,6 +52,7 @@ import com.google.android.material.appbar.AppBarLayout;
 import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.tabs.TabLayout;
 import com.squareup.picasso.Callback;
+import com.squareup.picasso.RequestCreator;
 
 import io.reactivex.rxjava3.core.Single;
 import org.schabi.newpipe.App;
@@ -226,6 +227,11 @@ public final class VideoDetailFragment
     // the full StreamInfo is still being fetched. Consumed (and cleared) once the fetch resolves.
     @Nullable
     private StreamInfoItem previewInfoItem = null;
+    // True between showHeaderPreview() drawing the preview and handleResult()/handleError()
+    // taking it down. The preview leaves the content root VISIBLE where upstream's loading state
+    // leaves it INVISIBLE, so the teardown has to be explicit: without it an error would paint the
+    // error panel underneath a still-visible (and still-clickable) metadata row.
+    private boolean showingHeaderPreview = false;
     private Disposable currentWorker;
     private final DeArrowItemController deArrowController = new DeArrowItemController();
     @NonNull
@@ -301,8 +307,24 @@ public final class VideoDetailFragment
                                                   @Nullable final String videoUrl,
                                                   @NonNull final String name,
                                                   @Nullable final PlayQueue queue) {
+        return getInstance(serviceId, videoUrl, name, queue, null);
+    }
+
+    /**
+     * @param previewItem the tapped list item, so the very first video opened after launch gets
+     *     the instant header too. That path creates the fragment instead of reusing a visible one,
+     *     so it never reaches {@link #selectAndLoadVideo(int, String, String, PlayQueue,
+     *     StreamInfoItem)} and would otherwise load with no preview -- blanking the page in
+     *     exactly the case the optimization exists for.
+     */
+    public static VideoDetailFragment getInstance(final int serviceId,
+                                                  @Nullable final String videoUrl,
+                                                  @NonNull final String name,
+                                                  @Nullable final PlayQueue queue,
+                                                  @Nullable final StreamInfoItem previewItem) {
         final VideoDetailFragment instance = new VideoDetailFragment();
         instance.setInitialData(serviceId, videoUrl, name, queue);
+        instance.previewInfoItem = previewItem;
         return instance;
     }
 
@@ -483,6 +505,7 @@ public final class VideoDetailFragment
         // The view tree is going away while the fragment (and currentInfo) survives, so the next
         // view must be rendered from scratch instead of being skipped as already drawn.
         renderedInfoUrl = null;
+        showingHeaderPreview = false;
         moveThumbnailToContainer(binding.detailThumbnailContainer);
         super.onDestroyView();
         binding = null;
@@ -596,6 +619,13 @@ public final class VideoDetailFragment
                 }
             }
         } else if (id == R.id.detail_uploader_root_layout) {
+            // currentInfo is null for the whole header-preview window (startLoading() nulls it
+            // right after showLoading() has drawn the preview), and unlike upstream's loading
+            // state the preview leaves this row visible and hit-testable. onLongClick() guards the
+            // whole method; onClick() does not, so guard here.
+            if (currentInfo == null) {
+                return;
+            }
             if (isEmpty(currentInfo.getSubChannelUrl())) {
                 if (!isEmpty(currentInfo.getUploaderUrl())) {
                     openChannel(currentInfo.getUploaderUrl(), currentInfo.getUploaderName());
@@ -863,7 +893,20 @@ public final class VideoDetailFragment
     }
 
     private void initThumbnailViews(@NonNull final StreamInfo info) {
-        PicassoHelper.loadScaledDownThumbnail(getContext(), info.getThumbnailUrl()).tag(PICASSO_VIDEO_DETAILS_TAG)
+        final RequestCreator thumbnailRequest = PicassoHelper
+                .loadScaledDownThumbnail(getContext(), info.getThumbnailUrl())
+                .tag(PICASSO_VIDEO_DETAILS_TAG);
+        // The preview drew the tapped list item's thumbnail, which is a DIFFERENT URL from this
+        // one -- the item's comes from the renderer JSON (hqdefault + sqp signature), StreamInfo's
+        // from playerResponse.videoDetails (usually maxresdefault). Picasso keys its cache on the
+        // URL, so this is a guaranteed cache miss and, with no placeholder, Picasso clears the
+        // ImageView first: the header the user is already looking at blanks, then repopulates.
+        // Hold the preview frame as the placeholder for that gap.
+        final Drawable previewThumbnail = binding.detailThumbnailImageView.getDrawable();
+        if (showingHeaderPreview && previewThumbnail != null) {
+            thumbnailRequest.placeholder(previewThumbnail);
+        }
+        thumbnailRequest
                 .into(binding.detailThumbnailImageView, new Callback() {
                     @Override
                     public void onSuccess() {
@@ -1744,6 +1787,19 @@ public final class VideoDetailFragment
         binding.viewPager.setVisibility(View.GONE);
         binding.tabLayout.setVisibility(View.GONE);
 
+        // Take the preview down. error_panel and detail_content_root_hiding are siblings anchored
+        // to the same y-origin, so a preview left visible is painted OVER the error text and Retry
+        // button -- and the uploader row on top of them stays clickable. Upstream cannot hit this:
+        // its loading state already made the container INVISIBLE before the fetch failed. Only
+        // undo it when we actually drew a preview, so the non-preview paths keep upstream's
+        // behaviour exactly.
+        if (showingHeaderPreview) {
+            binding.detailContentRootHiding.setVisibility(View.INVISIBLE);
+            binding.detailUploaderRootLayout.setClickable(true);
+            binding.detailUploaderRootLayout.setLongClickable(true);
+            showingHeaderPreview = false;
+        }
+
         previewInfoItem = null;
         renderedInfoUrl = null;
     }
@@ -1808,6 +1864,9 @@ public final class VideoDetailFragment
         // frame onto the new one, and forget what was drawn so the next render is not skipped.
         deArrowController.dispose();
         renderedInfoUrl = null;
+        // Cleared here rather than only in the teardowns: a load that takes the non-preview path
+        // must not inherit a stale flag from the previous video's preview.
+        showingHeaderPreview = false;
 
         final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(activity);
         boolean shouldEllipsize = prefs.getBoolean(activity.getString(R.string.auto_ellipsize_key), false);
@@ -1874,7 +1933,13 @@ public final class VideoDetailFragment
         animate(binding.loadingProgressBar, false, 0);
 
         // Keep the body container visible and pre-fill what we already know.
+        showingHeaderPreview = true;
         binding.detailContentRootHiding.setVisibility(View.VISIBLE);
+        // ...but the uploader row inside it dereferences currentInfo, which stays null until
+        // handleResult(). Upstream never has to think about this because its loading state makes
+        // the whole container INVISIBLE, and an INVISIBLE view takes no touches.
+        binding.detailUploaderRootLayout.setClickable(false);
+        binding.detailUploaderRootLayout.setLongClickable(false);
 
         // Thumbnail: usually a Picasso cache hit from the feed, so it shows immediately. Use the
         // same request handleResult() uses so the cache aligns and there is no later flicker; do
@@ -2060,6 +2125,8 @@ public final class VideoDetailFragment
         // Restore the primary controls: the preview path hides them while currentInfo is null
         // (their click listeners dereference it); everything else here is set per real data.
         binding.detailControlPanel.setVisibility(View.VISIBLE);
+        binding.detailUploaderRootLayout.setClickable(true);
+        binding.detailUploaderRootLayout.setLongClickable(true);
         previewInfoItem = null;
         binding.detailToggleSecondaryControlsView.setRotation(0);
         binding.detailToggleSecondaryControlsView.setVisibility(View.VISIBLE);
@@ -2075,6 +2142,9 @@ public final class VideoDetailFragment
                 .getDefaultResolutionIndex(activity, sortedVideoStreams);
         updateProgressInfo(info);
         initThumbnailViews(info);
+        // Consumed by initThumbnailViews() just above (it holds the preview frame as the
+        // placeholder), so clear it only after that call.
+        showingHeaderPreview = false;
         deArrowController.apply(binding.detailVideoTitleView, binding.detailThumbnailImageView,
                 binding.dearrowBadge, info.getServiceId(), url, info.getName(),
                 info.getThumbnailUrl());

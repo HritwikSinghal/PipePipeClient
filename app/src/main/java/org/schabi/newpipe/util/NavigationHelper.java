@@ -433,8 +433,10 @@ public final class NavigationHelper {
         if (fragment instanceof VideoDetailFragment && fragment.isVisible()) {
             onVideoDetailFragmentReady.run((VideoDetailFragment) fragment, true);
         } else {
+            // Pass the preview item at construction: this branch commits the fragment with
+            // loadVideo = false, so selectAndLoadVideo() -- the only other way in -- never runs.
             final VideoDetailFragment instance = VideoDetailFragment
-                    .getInstance(serviceId, url, title, playQueue);
+                    .getInstance(serviceId, url, title, playQueue, previewItem);
             instance.setAutoPlay(autoPlay);
 
             defaultTransaction(fragmentManager)
