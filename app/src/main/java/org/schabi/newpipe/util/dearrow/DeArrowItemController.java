@@ -622,7 +622,12 @@ public final class DeArrowItemController {
             disposable = null;
         }
         cancelPendingThumbnail();
-        releaseBadge();
+        // hideBadge(), not releaseBadge(): the badge must not outlive the binding it describes.
+        // Every caller is a teardown or a recycle, and a recycled holder re-shows the badge on its
+        // next apply(). At the non-recycled sites nothing else ever hides it -- only applyInternal
+        // does, via handleResult -- so releasing it without hiding left a lit "DeArrow active"
+        // badge over the *next* video for its whole fetch, and permanently if that fetch failed.
+        hideBadge();
         DeArrowSettingsWatcher.unregister(this);
         boundVideoId = null;
         boundUrl = null;
