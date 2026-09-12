@@ -427,3 +427,56 @@ if (project.hasProperty('forkAbiFilter')) {
 if (project.hasProperty('forkMinify')) {
     android.buildTypes.release.minifyEnabled = project.forkMinify.toBoolean()
 }
+
+// --- Fork (PipePipeD): non-debuggable `benchmark` build type (additive; same rebase-safe
+// rationale as every block above -- reconfigures android.buildTypes AFTER the android{} block
+// instead of editing upstream's buildTypes{} DSL, so `git rebase upstream/main` never conflicts
+// here). WHY THIS EXISTS: ART refuses to AOT-compile a debuggable package --
+// `adb shell cmd package compile -m speed -f wtf.pipepiped.debug` reports Success and exits 0 but
+// silently leaves the compilation filter at "verify", so on the debug build every measured
+// benchmark number is interpreted+JIT, never AOT, and that state can be neither controlled nor
+// truthfully reported. Guarded by -PforkBenchmark so a plain build (and CI, and
+// `nix run .#debug`/`.#build`) never sees this build type; only
+// `-PforkBenchmark=true :app:assembleBenchmark` does.
+//
+// Deliberately placed at the END of the script, after the forkAbiFilter + forkMinify blocks:
+// initWith(release) snapshots release's state at the point it runs, so this only works correctly
+// here because release's minifyEnabled already reflects whatever -PforkMinify did to it. That is
+// the point of matching release rather than hardcoding a value: what gets measured must be built
+// the same way as what ships, or the numbers don't mean anything.
+if (project.hasProperty('forkBenchmark')) {
+    android.buildTypes {
+        benchmark {
+            initWith release
+            // Implied by initWith(release) already (upstream's release never sets debuggable
+            // true), but stated explicitly: a benchmark build type only makes sense at all if
+            // this invariant holds, so make it readable at the call site.
+            debuggable false
+            // No production keystore needed to exercise this variant: sign with the
+            // always-present debug signingConfig instead of signingConfigs.release, which
+            // upstream only registers when KEY_PATH/KEY_STORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD are
+            // all set (see the signingConfigs block above).
+            signingConfig android.signingConfigs.debug
+            // initWith also copies release's applicationIdSuffix (".release"), which would
+            // collide with the real release variant's applicationId (both "wtf.pipepiped.release")
+            // and refuse to install alongside it. Give benchmark its own suffix so debug, release
+            // and benchmark all coexist on one device.
+            applicationIdSuffix ".benchmark"
+            // Standard Macrobenchmark setup: resolves a "benchmark"-flavoured dependency against
+            // that dependency's "release" variant when it has no "benchmark" build type of its
+            // own. Neither of this app's current dependencies actually needs the fallback today
+            // (:ffmpeg is a bare prebuilt .aar with no variants; PipePipeExtractor is a plain
+            // Java/Kotlin composite build, also variant-free) but it costs nothing to have and
+            // avoids a surprise if that ever changes.
+            matchingFallbacks = ['release']
+        }
+    }
+
+    dependencies {
+        // Required by Macrobenchmark (androidx.benchmark.macro) 1.3+ on the *target* app for
+        // profile install/reset and shader-cache clearing -- without it, CompilationMode.Full()/
+        // Partial() and baseline-profile installation silently no-op. Scoped to this guard so it
+        // never enters a normal debug/release build.
+        benchmarkImplementation "androidx.profileinstaller:profileinstaller:1.4.1"
+    }
+}
