@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+>
+
+    <!-- Fork (PipePipeD): lets shell-driven profiling tools (Macrobenchmark, simpleperf,
+         Perfetto) attach to this build type. Only merged into the "benchmark" variant;
+         main/src's manifest, and every other variant, is untouched. -->
+    <application>
+        <profileable
+            android:shell="true"
+            tools:targetApi="29" />
+    </application>
+</manifest>
