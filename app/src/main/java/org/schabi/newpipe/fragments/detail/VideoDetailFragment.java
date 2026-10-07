@@ -516,7 +516,6 @@ public final class VideoDetailFragment
         // view must be rendered from scratch instead of being skipped as already drawn.
         renderedInfoUrl = null;
         showingHeaderPreview = false;
-        moveThumbnailToContainer(binding.detailThumbnailContainer);
         super.onDestroyView();
         binding = null;
     }
