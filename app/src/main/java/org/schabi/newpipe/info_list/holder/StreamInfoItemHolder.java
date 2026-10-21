@@ -18,8 +18,7 @@ import org.schabi.newpipe.local.history.HistoryRecordManager;
 import androidx.preference.PreferenceManager;
 
 import org.schabi.newpipe.util.Localization;
-import org.schabi.newpipe.util.dearrow.DeArrowBinder;
-import org.schabi.newpipe.util.dearrow.DeArrowRow;
+import org.schabi.newpipe.util.PicassoHelper;
 import org.schabi.newpipe.views.AnimatedProgressBar;
 
 import java.util.concurrent.TimeUnit;
@@ -118,8 +117,8 @@ public class StreamInfoItemHolder extends InfoItemHolder {
             itemProgressView.setVisibility(View.GONE);
         }
 
-        DeArrowBinder.bind(DeArrowRow.from(item, item.getThumbnailUrl()),
-                itemVideoTitleView, itemThumbnailView);
+        PicassoHelper.loadScaledDownThumbnail(itemThumbnailView.getContext(), item.getThumbnailUrl())
+                .into(itemThumbnailView);
 
         itemView.setOnClickListener(view -> {
             if (itemBuilder.getOnStreamSelectedListener() != null) {
